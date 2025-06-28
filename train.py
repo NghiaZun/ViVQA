@@ -3,8 +3,8 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 from transformers import BlipImageProcessor
 from tqdm import tqdm
-from dataset_vqa_gen import VQAGenDataset
-from vqa_vietnamese_gen import VQAGenModel
+from dataset import VQAGenDataset
+from model import VQAGenModel
 
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
