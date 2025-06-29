@@ -1,3 +1,4 @@
+import os
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -9,10 +10,14 @@ from model import VQAGenModel
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
+CHECKPOINT_DIR = '/kaggle/working/checkpoints'
+os.makedirs(CHECKPOINT_DIR, exist_ok=True)
+
 BATCH_SIZE = 8
 NUM_EPOCHS = 5
 LR = 2e-4
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
+RESUME_EPOCH = 0  # Change this if resuming
 
 # --- Dataset ---
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip2-opt-2.7b')
@@ -23,11 +28,20 @@ dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
 model = VQAGenModel().to(DEVICE)
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 
+# Resume checkpoint if needed
+if RESUME_EPOCH > 0:
+    model_path = os.path.join(CHECKPOINT_DIR, f'model_epoch{RESUME_EPOCH}.pth')
+    optim_path = os.path.join(CHECKPOINT_DIR, f'optim_epoch{RESUME_EPOCH}.pth')
+    print(f"Resuming from epoch {RESUME_EPOCH}...")
+    model.load_state_dict(torch.load(model_path))
+    optimizer.load_state_dict(torch.load(optim_path))
+
 # --- Training ---
 model.train()
-for epoch in range(NUM_EPOCHS):
+for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
     total_loss = 0
-    for vision_feats, input_ids, attention_mask, labels in tqdm(dataloader):
+    pbar = tqdm(dataloader, desc=f"Epoch {epoch+1}/{NUM_EPOCHS}")
+    for vision_feats, input_ids, attention_mask, labels in pbar:
         vision_feats = vision_feats.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
@@ -40,8 +54,14 @@ for epoch in range(NUM_EPOCHS):
         optimizer.zero_grad()
 
         total_loss += loss.item()
+        pbar.set_postfix(loss=loss.item())
 
-    print(f"Epoch {epoch+1}/{NUM_EPOCHS}, Loss: {total_loss/len(dataloader):.4f}")
+    avg_loss = total_loss / len(dataloader)
+    print(f"Epoch {epoch+1} completed. Avg Loss: {avg_loss:.4f}")
 
-# Save the model
-torch.save(model.state_dict(), 'vqagen_model.pth')
+    # Save checkpoint
+    torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f'model_epoch{epoch+1}.pth'))
+    torch.save(optimizer.state_dict(), os.path.join(CHECKPOINT_DIR, f'optim_epoch{epoch+1}.pth'))
+
+# Final model
+torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'vqagen_final.pth'))
