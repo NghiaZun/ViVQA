@@ -10,7 +10,8 @@ from model import VQAGenModel
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
-CHECKPOINT_DIR = '/kaggle/working/checkpoints'
+CHECKPOINT_DIR = '/kaggle/input/checkpoint/pytorch/default/1/checkpoint'
+SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 
 BATCH_SIZE = 8
@@ -60,8 +61,8 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
     print(f"Epoch {epoch+1} completed. Avg Loss: {avg_loss:.4f}")
 
     # Save checkpoint
-    torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, f'model_epoch{epoch+1}.pth'))
-    torch.save(optimizer.state_dict(), os.path.join(CHECKPOINT_DIR, f'optim_epoch{epoch+1}.pth'))
+    torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'model_epoch{epoch+1}.pth'))
+    torch.save(optimizer.state_dict(), os.path.join(SAVE_DIR, f'optim_epoch{epoch+1}.pth'))
 
 # Final model
-torch.save(model.state_dict(), os.path.join(CHECKPOINT_DIR, 'vqagen_final.pth'))
+torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
