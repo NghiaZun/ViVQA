@@ -13,7 +13,7 @@ IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
 CHECKPOINT_DIR = '/kaggle/input/checkpoint/pytorch/default/1/checkpoint'
 SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
-
+os.makedirs(SAVE_DIR, exist_ok=True)
 BATCH_SIZE = 8
 NUM_EPOCHS = 5
 LR = 2e-4
