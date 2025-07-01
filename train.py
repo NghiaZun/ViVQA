@@ -10,7 +10,7 @@ from model import VQAGenModel
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
-CHECKPOINT_DIR = '/kaggle/input/checkpoint/pytorch/default/1/checkpoint'
+CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/1/checkpoints'
 SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(CHECKPOINT_DIR, exist_ok=True)
 os.makedirs(SAVE_DIR, exist_ok=True)
