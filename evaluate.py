@@ -46,15 +46,8 @@ with torch.no_grad():
         attention_mask = attention_mask.to(DEVICE)
 
         # Sinh câu trả lời bằng generate
-        generated_ids = model.generate(
-            vision_feats=vision_feats,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_length=50,
-            num_beams=3,
-            do_sample=False,
-            pad_token_id=tokenizer.pad_token_id,
-            eos_token_id=tokenizer.eos_token_id
+        generated_ids = model(
+            vision_feats, input_ids, attention_mask, labels=None
         )
 
         decoded_preds = tokenizer.batch_decode(generated_ids, skip_special_tokens=True)
