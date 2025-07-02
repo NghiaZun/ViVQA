@@ -62,7 +62,7 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
                 answer_ids = generated_seq[input_length:]
                 
                 # Decode to text
-                answer = model.language_model.tokenizer.decode(
+                answer = model.tokenizer.decode(
                     answer_ids, 
                     skip_special_tokens=True
                 ).strip()

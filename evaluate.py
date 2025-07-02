@@ -68,4 +68,4 @@ if refs:
 else:
     print("No references found in test set. Only predictions are generated.")
     for i, pred in enumerate(preds[:10]):
-        print(f"Sample {i
+        print(f"Sample {i+1}: {pred}")
