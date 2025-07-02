@@ -51,15 +51,8 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
             attention_mask = attention_mask.to(device)
             
             # Generate answers
-            generated_ids = model.generate(
-                vision_feats=vision_feats,
-                input_ids=input_ids,
-                attention_mask=attention_mask,
-                max_length=50,
-                num_beams=3,
-                do_sample=False,
-                pad_token_id=model.language_model.config.pad_token_id,
-                eos_token_id=model.language_model.config.eos_token_id
+            generated_ids = model(
+                vision_feats, input_ids, attention_mask, labels=None
             )
             
             # Decode generated answers
