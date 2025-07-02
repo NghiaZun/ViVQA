@@ -31,7 +31,7 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
     # Load dataset
     print("Loading dataset...")
     vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip2-opt-2.7b')
-    test_dataset = VQAGenDataset(csv_path, image_folder, vision_processor, is_test=True)
+    test_dataset = VQAGenDataset(csv_path, image_folder, vision_processor)
     test_dataloader = DataLoader(test_dataset, batch_size=batch_size, shuffle=False)
     
     # Inference
