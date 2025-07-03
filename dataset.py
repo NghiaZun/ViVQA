@@ -9,7 +9,7 @@ class VQAGenDataset(Dataset):
     def __init__(self, csv_path, image_folder,
                  vision_processor,
                  phobert_tokenizer_name='vinai/phobert-base',
-                 t5_tokenizer_name='VietAI/vietT5-small',
+                 t5_tokenizer_name='VietAI/t5-small',
                  max_q_len=32, max_a_len=32):
 
         self.data = pd.read_csv(csv_path)

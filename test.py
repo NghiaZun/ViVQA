@@ -9,7 +9,7 @@ model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
 phobert_tokenizer = AutoTokenizer.from_pretrained('vinai/phobert-base')
-t5_tokenizer = T5Tokenizer.from_pretrained('VietAI/vietT5-small')
+t5_tokenizer = T5Tokenizer.from_pretrained('t5-small')
 image_folder = 'PATH_TO_IMAGE_FOLDER'
 
 # Gọi hàm

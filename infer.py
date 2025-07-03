@@ -10,7 +10,7 @@ model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip2-opt-2.7b')
 phobert_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base")
-t5_tokenizer = T5Tokenizer.from_pretrained("VietAI/vietT5-small")
+t5_tokenizer = T5Tokenizer.from_pretrained("t5-small")
 
 image = Image.open("sample.jpg").convert("RGB")
 pixel_values = vision_processor(images=image, return_tensors='pt')['pixel_values'].to(device)
