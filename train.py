@@ -59,8 +59,8 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
     print(f"Epoch {epoch+1} completed. Avg Loss: {avg_loss:.4f}")
 
     # Save checkpoint
-    torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'model_epoch{epoch+1}.pth'))
-    torch.save(optimizer.state_dict(), os.path.join(SAVE_DIR, f'optim_epoch{epoch+1}.pth'))
+    if epoch == NUM_EPOCHS - 1:
+        torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'final_model.pth'))
 
 # Final model
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))

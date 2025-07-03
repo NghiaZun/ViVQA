@@ -24,7 +24,7 @@ class VQAGenModel(nn.Module):
             nn.ReLU(),
             nn.Linear(hidden_dim, hidden_dim)
         )
-        # Decoder (VietT5-small)
+        # Decoder (VietT5-base)
         self.decoder = T5ForConditionalGeneration.from_pretrained(decoder_model_name)
         self.tokenizer = T5Tokenizer.from_pretrained(decoder_model_name)
 
