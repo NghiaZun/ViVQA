@@ -11,7 +11,7 @@ class VQAGenModel(nn.Module):
                  vision_model_name="Salesforce/blip-image-base",
                  text_model_name="vinai/phobert-base",
                  decoder_model_name="t5-small",
-                 hidden_dim=768):
+                 hidden_dim=512):
         super().__init__()
         # Vision encoder (ViT-B/16)
         blip = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base")
