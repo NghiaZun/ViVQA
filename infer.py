@@ -57,16 +57,12 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
             
             # Decode generated answers
             for i, generated_seq in enumerate(generated_ids):
-                # Skip input tokens để chỉ lấy phần answer được generate
-                input_length = input_ids[i].shape[0]
-                answer_ids = generated_seq[input_length:]
-                
-                # Decode to text
                 answer = model.tokenizer.decode(
-                    answer_ids, 
+                    generated_seq, 
                     skip_special_tokens=True
                 ).strip()
-                
+                print("Generated ids:", generated_seq)
+                print("Decoded answer:", answer)
                 results.append({
                     'batch_idx': batch_idx,
                     'sample_idx': i,
