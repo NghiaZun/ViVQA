@@ -57,11 +57,11 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
             generated_ids = model(
                 vision_feats, input_ids, attention_mask, labels=None
             )
-            
+
             # Decode generated answers
             for i, generated_seq in enumerate(generated_ids):
                 answer = model.tokenizer.decode(
-                    generated_seq, 
+                    generated_seq,
                     skip_special_tokens=True
                 ).strip()
                 print("Generated ids:", generated_seq)

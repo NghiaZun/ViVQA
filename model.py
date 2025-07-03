@@ -49,9 +49,9 @@ class VQAGenModel(nn.Module):
             )
             return output.loss, output.logits
         else:
-            output = self.decoder.generate(
-                inputs_embeds=decoder_input,
-                attention_mask=decoder_attention,
-                max_length=32
+            output = self.decoder(
+                encoder_outputs=(decoder_input,),
+                attention_mask=decoder_attention
             )
-            return output
+            pred_ids = output.logits.argmax(-1)
+            return pred_ids
