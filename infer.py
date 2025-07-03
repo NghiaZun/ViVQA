@@ -50,6 +50,9 @@ def infer_test(model_path, csv_path, image_folder, save_path, batch_size=8):
             input_ids = input_ids.to(device)
             attention_mask = attention_mask.to(device)
             
+            print("Input ids:", input_ids)
+            print("Vision feats:", vision_feats)
+
             # Generate answers
             generated_ids = model(
                 vision_feats, input_ids, attention_mask, labels=None
