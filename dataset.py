@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import Dataset
-from transformers import AutoTokenizer, T5Tokenizer, Blip2VisionModel
+from transformers import AutoTokenizer, T5Tokenizer
 from PIL import Image
 import pandas as pd
 import os
@@ -9,7 +9,7 @@ class VQAGenDataset(Dataset):
     def __init__(self, csv_path, image_folder,
                  vision_processor,
                  phobert_tokenizer_name='vinai/phobert-base',
-                 t5_tokenizer_name='VietAI/vit5-base',
+                 t5_tokenizer_name='VietAI/vietT5-small',
                  max_q_len=32, max_a_len=32):
 
         self.data = pd.read_csv(csv_path)
@@ -19,10 +19,6 @@ class VQAGenDataset(Dataset):
         self.a_tokenizer = T5Tokenizer.from_pretrained(t5_tokenizer_name)
         self.max_q_len = max_q_len
         self.max_a_len = max_a_len
-
-        # Load pretrained BLIP2 Vision Encoder
-        self.vision_model = Blip2VisionModel.from_pretrained("Salesforce/blip2-opt-2.7b")
-        self.vision_model.eval()
 
     def __len__(self):
         return len(self.data)
@@ -35,10 +31,7 @@ class VQAGenDataset(Dataset):
         img_path = os.path.join(self.image_folder, f"{img_id}.jpg")
         image = Image.open(img_path).convert('RGB')
         vision_inputs = self.vision_processor(images=image, return_tensors='pt')
-
-        # Get vision features from BLIP2 vision encoder
-        with torch.no_grad():
-            vision_feats = self.vision_model(**vision_inputs).last_hidden_state.squeeze(0)  # (N, 1408)
+        pixel_values = vision_inputs['pixel_values'].squeeze(0)  # (3, H, W)
 
         # Tokenize question
         q_enc = self.q_tokenizer(question, truncation=True, padding='max_length', max_length=self.max_q_len, return_tensors='pt')
@@ -46,4 +39,4 @@ class VQAGenDataset(Dataset):
         # Tokenize answer (for target)
         a_enc = self.a_tokenizer(answer, truncation=True, padding='max_length', max_length=self.max_a_len, return_tensors='pt')
 
-        return vision_feats, q_enc['input_ids'].squeeze(0), q_enc['attention_mask'].squeeze(0), a_enc['input_ids'].squeeze(0)
+        return pixel_values, q_enc['input_ids'].squeeze(0), q_enc['attention_mask'].squeeze(0), a_enc['input_ids'].squeeze(0)

@@ -1,57 +1,66 @@
-# ===============================
-# 1. MÔ HÌNH VQA GENERATIVE
-# ===============================
-
 import torch
-import torch.nn as nn
-from transformers import AutoModel, AutoTokenizer, T5Tokenizer, T5ForConditionalGeneration
+from torch import nn
+from transformers import (
+    BlipForQuestionAnswering,
+    AutoTokenizer, AutoModel,
+    T5ForConditionalGeneration, T5Tokenizer
+)
 
 class VQAGenModel(nn.Module):
-    def __init__(self, vision_dim=1408, hidden_dim=768, num_query_tokens=32,
-                 qformer_layers=4, qformer_heads=8,
-                 phoBERT_name='vinai/phobert-base',
-                 decoder_name='VietAI/vit5-base'):
+    def __init__(self,
+                 vision_model_name="Salesforce/blip-image-base",
+                 text_model_name="vinai/phobert-base",
+                 decoder_model_name="t5-small",
+                 hidden_dim=768):
         super().__init__()
+        # Vision encoder (ViT-B/16)
+        blip = BlipForQuestionAnswering.from_pretrained("Salesforce/blip-vqa-base")
+        self.vision_encoder = blip.vision_model
+        # Text encoder (PhoBERT-small)
+        self.text_encoder = AutoModel.from_pretrained(text_model_name)
+        # Fusion layer
+        self.fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim),
+            nn.ReLU(),
+            nn.Linear(hidden_dim, hidden_dim)
+        )
+        # Decoder (VietT5-small)
+        self.decoder = T5ForConditionalGeneration.from_pretrained(decoder_model_name)
+        self.tokenizer = T5Tokenizer.from_pretrained(decoder_model_name)
 
-        self.vision_proj = nn.Linear(vision_dim, hidden_dim)
-        self.query_tokens = nn.Parameter(torch.randn(1, num_query_tokens, hidden_dim))
+    def forward(self, pixel_values, input_ids, attention_mask, labels=None):
+        # Encode image
+        vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
+        vision_feats = vision_out.mean(dim=1)  # Mean pooling
 
-        self.qformer_layers = nn.ModuleList([
-            nn.TransformerEncoderLayer(d_model=hidden_dim, nhead=qformer_heads, batch_first=True)
-            for _ in range(qformer_layers)
-        ])
+        # Encode text
+        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        text_feats = (text_out * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
 
-        self.phobert = AutoModel.from_pretrained(phoBERT_name)
-        self.decoder = T5ForConditionalGeneration.from_pretrained(decoder_name)
+        # Fusion
+        fused = torch.cat([vision_feats, text_feats], dim=-1)
+        fused = self.fusion(fused).unsqueeze(1)  # (B, 1, hidden_dim)
 
-        self.pho_proj = nn.Linear(self.phobert.config.hidden_size, hidden_dim)
-        self.tokenizer = T5Tokenizer.from_pretrained(decoder_name)
-
-    def forward(self, image_feats, input_ids, attention_mask, labels=None):
-        b = image_feats.size(0)
-        image_feats = self.vision_proj(image_feats)  # (b, n, d)
-        query = self.query_tokens.expand(b, -1, -1)
-
-        for layer in self.qformer_layers:
-            query = layer(query, src_key_padding_mask=None)
-
-        phobert_out = self.phobert(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        phobert_proj = self.pho_proj(phobert_out)
-
-        decoder_input = torch.cat([query, phobert_proj], dim=1)
-        decoder_attention = torch.ones(decoder_input.size()[:-1], dtype=torch.long).to(decoder_input.device)
-
+        # Decode
         if labels is not None:
-            output = self.decoder(
-                encoder_outputs=(decoder_input,),
-                attention_mask=decoder_attention,
-                labels=labels
+            outputs = self.decoder(
+                inputs_embeds=fused,
+                labels=labels,
+                return_dict=True
             )
-            return output.loss, output.logits
+            return outputs.loss, outputs.logits
         else:
-            output = self.decoder(
-                encoder_outputs=(decoder_input,),
-                attention_mask=decoder_attention
+            outputs = self.decoder(
+                inputs_embeds=fused,
+                return_dict=True
             )
-            pred_ids = output.logits.argmax(-1)
+            pred_ids = outputs.logits.argmax(-1)
             return pred_ids
+
+    def generate(self, pixel_values, input_ids, attention_mask, **gen_kwargs):
+        vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
+        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        text_feats = (text_out * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+        fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
+
+        return self.decoder.generate(inputs_embeds=fused, **gen_kwargs)
