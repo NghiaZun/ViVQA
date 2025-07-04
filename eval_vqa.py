@@ -56,3 +56,17 @@ else:
     print("No references found in test set. Only predictions are generated.")
     for i, pred in enumerate(preds[:10]):
         print(f"Sample {i+1}: {pred}")
+
+# --- Save predictions to CSV ---
+df = pd.read_csv(CSV_PATH)
+df = df.iloc[:len(preds)]  # Đảm bảo số dòng khớp số prediction
+
+df['prediction'] = preds
+if refs:
+    df['reference'] = refs
+else:
+    df['reference'] = ""
+
+save_path = "predictions.csv"
+df[['question', 'img_id', 'reference', 'prediction']].to_csv(save_path, index=False)
+print(f"Saved predictions to {save_path}")
