@@ -64,3 +64,5 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
 
 # Final model
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
+dataset.q_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'phobert_tokenizer'))
+dataset.a_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'vit5_tokenizer'))
