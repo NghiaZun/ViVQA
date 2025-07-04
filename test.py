@@ -21,12 +21,12 @@ def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = VQAGenModel().to(device)
-#model.load_state_dict(torch.load('/kaggle/input/vqa_model/pytorch/default/1/vqagen_final.pth', map_location=device))
+model.load_state_dict(torch.load('/kaggle/input/vqa_model/pytorch/default/1/vqagen_final.pth', map_location=device))
 model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
-phobert_tokenizer = AutoTokenizer.from_pretrained('vinai/phobert-base')
-vit5_tokenizer = AutoTokenizer.from_pretrained('VietAI/vit5-base')
+phobert_tokenizer = AutoTokenizer.from_pretrained('checkpoints/phobert_tokenizer')
+vit5_tokenizer = AutoTokenizer.from_pretrained('checkpoints/vit5_tokenizer')
 image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
 # Gọi hàm
