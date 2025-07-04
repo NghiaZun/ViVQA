@@ -5,6 +5,7 @@ from dataset import VQAGenDataset
 from model import VQAGenModel
 from evaluate import load
 from tqdm import tqdm
+import pandas as pd
 
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv'
