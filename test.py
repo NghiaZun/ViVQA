@@ -14,9 +14,10 @@ def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_
     attention_mask = q_enc['attention_mask'].to(device)
     with torch.no_grad():
         pred_ids = model.generate(pixel_values, input_ids, attention_mask, max_length=32)
-        print(pred_ids)  # <-- Thêm dòng này để debug
-        print(vit5_tokenizer.decode(pred_ids[0])) 
+        print("pred_ids:", pred_ids)
+        print("decoded (raw):", vit5_tokenizer.decode(pred_ids[0]))
         answer = vit5_tokenizer.decode(pred_ids[0], skip_special_tokens=True).strip()
+        print("decoded (skip_special_tokens):", answer)
     return answer
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
