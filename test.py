@@ -1,6 +1,7 @@
 # Khởi tạo các thành phần cần thiết
 from transformers import AutoTokenizer, T5Tokenizer, BlipImageProcessor
 from model import VQAGenModel
+import torch
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = VQAGenModel().to(device)
