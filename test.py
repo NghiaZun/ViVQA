@@ -30,8 +30,8 @@ vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorc
 image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
 # Gọi hàm
-question = "màu của miếng vá là gì"
-img_id = "557067"
+question = "màu của áo là gì"
+img_id = "436394"
 
 answer = answer_question(
     model, vision_processor, phobert_tokenizer, vit5_tokenizer,
