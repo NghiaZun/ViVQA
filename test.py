@@ -21,7 +21,7 @@ def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = VQAGenModel().to(device)
-#model.load_state_dict(torch.load('PATH_TO_MODEL.pth', map_location=device))
+model.load_state_dict(torch.load('/kaggle/input/vqa_model/pytorch/default/1/vqagen_final.pth', map_location=device))
 model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
