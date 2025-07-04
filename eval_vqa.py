@@ -1,6 +1,6 @@
 import torch
 from torch.utils.data import DataLoader
-from transformers import BlipImageProcessor
+from transformers import AutoTokenizer, BlipImageProcessor
 from dataset import VQAGenDataset
 from model import VQAGenModel
 from evaluate import load
@@ -12,6 +12,7 @@ IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 BATCH_SIZE = 8
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 MODEL_PATH = '/kaggle/working/checkpoints/vqagen_final.pth'
+vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vit5_tokenizer')
 
 # --- Load BLEU and ROUGE ---
 bleu = load("bleu")
@@ -27,8 +28,6 @@ model = VQAGenModel().to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
-tokenizer = model.decoder_tokenizer
-
 preds, refs = [], []
 
 with torch.no_grad():
@@ -39,12 +38,12 @@ with torch.no_grad():
         attention_mask = attention_mask.to(DEVICE)
 
         pred_ids = model(pixel_values, input_ids, attention_mask, labels=None)
-        decoded_preds = tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        decoded_preds = vit5_tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         preds.extend(decoded_preds)
 
         if labels is not None:
             labels = labels.to(DEVICE)
-            decoded_refs = tokenizer.batch_decode(labels, skip_special_tokens=True)
+            decoded_refs = vit5_tokenizer.batch_decode(labels, skip_special_tokens=True)
             refs.extend(decoded_refs)
 
 # --- Evaluation ---
