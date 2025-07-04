@@ -10,11 +10,11 @@ model.eval()
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
 phobert_tokenizer = AutoTokenizer.from_pretrained('vinai/phobert-base')
 t5_tokenizer = T5Tokenizer.from_pretrained('t5-base')
-image_folder = 'PATH_TO_IMAGE_FOLDER'
+image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
 # Gọi hàm
-question = "Người trong ảnh đang làm gì?"
-img_id = "000123"  # thay bằng id ảnh thực tế
+question = "màu của miếng vá là gì"  # thay bằng câu hỏi thực tế
+img_id = "557067"  # thay bằng id ảnh thực tế
 
 answer = answer_question(
     model, vision_processor, phobert_tokenizer, t5_tokenizer,
