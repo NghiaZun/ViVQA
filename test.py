@@ -30,12 +30,18 @@ phobert_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pyt
 vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vit5_tokenizer')
 image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
-# Gọi hàm
-question = "màu của áo là gì"
-img_id = "436394"
+# Thử nhiều câu hỏi/ảnh để kiểm tra đa dạng
+test_cases = [
+    ("màu của áo là gì", "436394"),
+    ("màu của miếng vá là gì", "557067"),
+    ("màu của căn phòng là gì", "426077"),
+    ("có bao nhiêu người trong ảnh", "123456"),
+]
 
-answer = answer_question(
-    model, vision_processor, phobert_tokenizer, vit5_tokenizer,
-    image_folder, question, img_id, device
-)
-print("Answer:", answer)
+for question, img_id in test_cases:
+    print(f"\nQuestion: {question} | Image ID: {img_id}")
+    answer = answer_question(
+        model, vision_processor, phobert_tokenizer, vit5_tokenizer,
+        image_folder, question, img_id, device
+    )
+    print("Answer:", answer)
