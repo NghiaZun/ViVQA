@@ -1,9 +1,8 @@
-# Khởi tạo các thành phần cần thiết
-from transformers import AutoTokenizer, T5Tokenizer, BlipImageProcessor
+from transformers import AutoTokenizer, BlipImageProcessor
 from model import VQAGenModel
 import torch
 
-def answer_question(model, vision_processor, q_tokenizer, a_tokenizer, image_folder, question, img_id, device='cpu', max_q_len=32):
+def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_folder, question, img_id, device='cpu', max_q_len=32):
     import os
     from PIL import Image
     model.eval()
@@ -15,7 +14,9 @@ def answer_question(model, vision_processor, q_tokenizer, a_tokenizer, image_fol
     attention_mask = q_enc['attention_mask'].to(device)
     with torch.no_grad():
         pred_ids = model.generate(pixel_values, input_ids, attention_mask, max_length=32)
-        answer = a_tokenizer.decode(pred_ids[0], skip_special_tokens=True).strip()
+        print(pred_ids)  # <-- Thêm dòng này để debug
+        print(vit5_tokenizer.decode(pred_ids[0])) 
+        answer = vit5_tokenizer.decode(pred_ids[0], skip_special_tokens=True).strip()
     return answer
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
@@ -25,15 +26,15 @@ model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
 phobert_tokenizer = AutoTokenizer.from_pretrained('vinai/phobert-base')
-t5_tokenizer = T5Tokenizer.from_pretrained('t5-base')
+vit5_tokenizer = AutoTokenizer.from_pretrained('VietAI/vit5-base')
 image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
 # Gọi hàm
-question = "màu của miếng vá là gì"  # thay bằng câu hỏi thực tế
-img_id = "557067"  # thay bằng id ảnh thực tế
+question = "màu của miếng vá là gì"
+img_id = "557067"
 
 answer = answer_question(
-    model, vision_processor, phobert_tokenizer, t5_tokenizer,
+    model, vision_processor, phobert_tokenizer, vit5_tokenizer,
     image_folder, question, img_id, device
 )
 print("Answer:", answer)

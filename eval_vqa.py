@@ -27,7 +27,7 @@ model = VQAGenModel().to(DEVICE)
 model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
 model.eval()
 
-tokenizer = model.tokenizer
+tokenizer = model.decoder_tokenizer
 
 preds, refs = [], []
 
