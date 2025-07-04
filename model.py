@@ -23,9 +23,12 @@ class VQAGenModel(nn.Module):
 
         # Fusion layer: [vision_feats; text_feats] → hidden_dim
         self.fusion = nn.Sequential(
+            nn.Linear(hidden_dim * 2, hidden_dim * 2),
+            nn.ReLU(),
+            nn.Dropout(0.2),
             nn.Linear(hidden_dim * 2, hidden_dim),
             nn.ReLU(),
-            nn.Linear(hidden_dim, hidden_dim)
+            nn.Dropout(0.1)
         )
 
         # Decoder (VietT5-base via AutoModel)
@@ -40,9 +43,9 @@ class VQAGenModel(nn.Module):
         vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
         vision_feats = vision_out.mean(dim=1)  # (B, hidden_dim)
 
-        # Encode question
+        # Encode question (use CLS token from PhoBERT)
         text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = (text_out * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
+        text_feats = text_out[:, 0, :]  # CLS token
 
         # Fusion: concat & project
         fused = torch.cat([vision_feats, text_feats], dim=-1)  # (B, hidden_dim*2)
@@ -50,7 +53,8 @@ class VQAGenModel(nn.Module):
         fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)  # (B, 1)
 
         # Encode for decoder
-        encoder_outputs = self.decoder.get_encoder()(inputs_embeds=fused, attention_mask=fusion_mask)
+        encoder = self.decoder.get_encoder()
+        encoder_outputs = encoder(inputs_embeds=fused, attention_mask=fusion_mask)
 
         if labels is not None:
             outputs = self.decoder(
@@ -61,24 +65,35 @@ class VQAGenModel(nn.Module):
             return outputs.loss, outputs.logits
         else:
             outputs = self.decoder.generate(
-                encoder_outputs=encoder_outputs,
+                inputs_embeds=fused,
+                attention_mask=fusion_mask,
                 max_length=32,
                 num_beams=4,
-                early_stopping=True
+                early_stopping=True,
+                pad_token_id=self.decoder_tokenizer.pad_token_id,
+                eos_token_id=self.decoder_tokenizer.eos_token_id
             )
             return outputs
 
     def generate(self, pixel_values, input_ids, attention_mask, **gen_kwargs):
+        # Encode image
         vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
-        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = (text_out * attention_mask.unsqueeze(-1)).sum(dim=1) / attention_mask.sum(dim=1, keepdim=True)
 
+        # Encode question
+        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        text_feats = text_out[:, 0, :]  # CLS token
+
+        # Fusion
         fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
         fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
 
-        encoder_outputs = self.decoder.get_encoder()(inputs_embeds=fused, attention_mask=fusion_mask)
-
         return self.decoder.generate(
-            encoder_outputs=encoder_outputs,
+            inputs_embeds=fused,
+            attention_mask=fusion_mask,
+            pad_token_id=self.decoder_tokenizer.pad_token_id,
+            eos_token_id=self.decoder_tokenizer.eos_token_id,
+            max_length=32,
+            num_beams=4,
+            early_stopping=True,
             **gen_kwargs
         )
