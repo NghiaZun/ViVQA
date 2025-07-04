@@ -10,7 +10,7 @@ import pandas as pd
 # --- Config ---
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
-BATCH_SIZE = 8
+BATCH_SIZE = 1
 DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
 MODEL_PATH = '/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vqagen_final.pth'
 vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vit5_tokenizer')
@@ -38,8 +38,7 @@ with torch.no_grad():
         input_ids = input_ids.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
 
-        pred_ids = model(pixel_values, input_ids, attention_mask, labels=None)
-        decoded_preds = vit5_tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
+        pred_ids = model.generate(pixel_values, input_ids, attention_mask, max_length=32)        decoded_preds = vit5_tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         preds.extend(decoded_preds)
 
         if labels is not None:
