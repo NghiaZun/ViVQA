@@ -22,7 +22,7 @@ RESUME_EPOCH = 0  # Set > 0 to resume
 # === DATASET & DATALOADER ===
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
 dataset = VQAGenDataset(CSV_PATH, IMAGE_FOLDER, vision_processor)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True)
+dataloader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
 
 # === MODEL & OPTIMIZER ===
 model = VQAGenModel().to(DEVICE)
@@ -64,7 +64,29 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
 
 # === FINAL SAVE ===
 model.eval()
-torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
+for idx in range(len(dataset)):
+    with torch.no_grad():
+        pixel_values, input_ids, attention_mask, labels = dataset[idx]
+        pixel_values = pixel_values.unsqueeze(0).to(DEVICE)
+        input_ids = input_ids.unsqueeze(0).to(DEVICE)
+        attention_mask = attention_mask.unsqueeze(0).to(DEVICE)
+
+        pred_ids = model.generate(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=32,
+            num_beams=4,
+            early_stopping=True
+        )
+
+        decoded = dataset.a_tokenizer.decode(pred_ids[0], skip_special_tokens=True)
+        question = dataset.q_tokenizer.decode(input_ids[0], skip_special_tokens=True)
+        answer = dataset.a_tokenizer.decode(labels[labels != -100], skip_special_tokens=True)
+
+        print(f"\nQ: {question}")
+        print(f"GT: {answer}")
+        print(f"Pred: {decoded}")torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
 dataset.q_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'phobert_tokenizer'))
 dataset.a_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'vit5_tokenizer'))
 
