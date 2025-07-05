@@ -86,7 +86,8 @@ for idx in range(len(dataset)):
 
         print(f"\nQ: {question}")
         print(f"GT: {answer}")
-        print(f"Pred: {decoded}")torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
+        print(f"Pred: {decoded}") 
+torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
 dataset.q_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'phobert_tokenizer'))
 dataset.a_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'vit5_tokenizer'))
 
