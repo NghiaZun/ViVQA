@@ -16,7 +16,7 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 
 results = []
 BATCH_SIZE = 8
-NUM_EPOCHS = 20
+NUM_EPOCHS = 100
 LR = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 RESUME_EPOCH = 0  # Set > 0 to resume
