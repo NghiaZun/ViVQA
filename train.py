@@ -8,7 +8,7 @@ from model import VQAGenModel
 import pandas as pd
 
 # === CONFIGURATION ===
-CSV_PATH = '/kaggle/input/csv-10/small_dataset.csv'
+CSV_PATH = '/kaggle/input/csv1000/mini_train.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
 CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/1/checkpoints'
 SAVE_DIR = '/kaggle/working/checkpoints'
