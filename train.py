@@ -62,10 +62,6 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
     avg_loss = total_loss / len(dataloader)
     print(f"[INFO] Epoch {epoch+1} completed. Avg Loss: {avg_loss:.4f}")
 
-    # === SAVE CHECKPOINT ===
-    torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'model_epoch{epoch+1}.pth'))
-    torch.save(optimizer.state_dict(), os.path.join(SAVE_DIR, f'optim_epoch{epoch+1}.pth'))
-
 # === FINAL SAVE ===
 model.eval()
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
