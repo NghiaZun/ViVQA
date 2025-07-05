@@ -5,6 +5,7 @@ from transformers import BlipImageProcessor
 from tqdm import tqdm
 from dataset import VQAGenDataset
 from model import VQAGenModel
+import pandas as pd
 
 # === CONFIGURATION ===
 CSV_PATH = '/kaggle/input/csv-10/small_dataset.csv'
@@ -13,8 +14,9 @@ CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/1/checkpoints'
 SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-BATCH_SIZE = 2
-NUM_EPOCHS = 100
+results = []
+BATCH_SIZE = 8
+NUM_EPOCHS = 20
 LR = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 RESUME_EPOCH = 0  # Set > 0 to resume
@@ -81,9 +83,13 @@ for idx in range(len(dataset)):
         question = dataset.q_tokenizer.decode(input_ids[0], skip_special_tokens=True)
         answer = dataset.a_tokenizer.decode(labels[labels != -100], skip_special_tokens=True)
 
-        print(f"\nQ: {question}")
-        print(f"GT: {answer}")
-        print(f"Pred: {decoded}") 
+        results.append({
+            "question": question,
+            "ground_truth": answer,
+            "prediction": decoded
+        })
+df = pd.DataFrame(results)
+df.to_csv("train_predictions.csv", index=False)
 torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
 dataset.q_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'phobert_tokenizer'))
 dataset.a_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'vit5_tokenizer'))
