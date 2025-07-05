@@ -7,14 +7,14 @@ from dataset import VQAGenDataset
 from model import VQAGenModel
 
 # === CONFIGURATION ===
-CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
+CSV_PATH = '/kaggle/input/csv-10/small_dataset.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
 CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/1/checkpoints'
 SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-BATCH_SIZE = 8
-NUM_EPOCHS = 5
+BATCH_SIZE = 2
+NUM_EPOCHS = 100
 LR = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 RESUME_EPOCH = 0  # Set > 0 to resume
