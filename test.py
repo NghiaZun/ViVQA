@@ -13,7 +13,7 @@ def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_
     input_ids = q_enc['input_ids'].to(device)
     attention_mask = q_enc['attention_mask'].to(device)
     with torch.no_grad():
-        pred_ids = model.generate(pixel_values, input_ids, attention_mask, max_length=32)
+        pred_ids = model.generate(pixel_values, input_ids, attention_mask)
         print("pred_ids:", pred_ids)
         print("decoded (raw):", vit5_tokenizer.decode(pred_ids[0]))
         answer = vit5_tokenizer.decode(pred_ids[0], skip_special_tokens=True).strip()
