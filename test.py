@@ -22,12 +22,12 @@ def answer_question(model, vision_processor, q_tokenizer, vit5_tokenizer, image_
 
 device = 'cuda' if torch.cuda.is_available() else 'cpu'
 model = VQAGenModel().to(device)
-model.load_state_dict(torch.load('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vqagen_final.pth', map_location=device))
+model.load_state_dict(torch.load('/kaggle/input/new_checkpoints/pytorch/default/1/checkpoints/vqagen_final.pth', map_location=device))
 model.eval()
 
 vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip-vqa-base')
-phobert_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/phobert_tokenizer')
-vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/checkpoints/pytorch/default/1/checkpoints/vit5_tokenizer')
+phobert_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/new_checkpoints/pytorch/default/1/checkpoints/phobert_tokenizer')
+vit5_tokenizer = AutoTokenizer.from_pretrained('/kaggle/input/new_checkpoints/pytorch/default/1/checkpoints/vit5_tokenizer')
 image_folder = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
 
 # Thử nhiều câu hỏi/ảnh để kiểm tra đa dạng
@@ -35,7 +35,6 @@ test_cases = [
     ("màu của áo là gì", "436394"),
     ("màu của miếng vá là gì", "557067"),
     ("màu của căn phòng là gì", "426077"),
-    ("có bao nhiêu người trong ảnh", "123456"),
 ]
 
 for question, img_id in test_cases:
