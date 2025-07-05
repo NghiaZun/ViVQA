@@ -74,10 +74,7 @@ for idx in range(len(dataset)):
         pred_ids = model.generate(
             pixel_values=pixel_values,
             input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_length=32,
-            num_beams=4,
-            early_stopping=True
+            attention_mask=attention_mask
         )
 
         decoded = dataset.a_tokenizer.decode(pred_ids[0], skip_special_tokens=True)
