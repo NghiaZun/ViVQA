@@ -15,7 +15,7 @@ SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(SAVE_DIR, exist_ok=True)
 
 results = []
-BATCH_SIZE = 8
+BATCH_SIZE = 4
 NUM_EPOCHS = 100
 LR = 2e-4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
