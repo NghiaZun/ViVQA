@@ -88,23 +88,16 @@ for epoch in range(RESUME_EPOCH, NUM_EPOCHS):
     avg_val_loss = val_loss / len(val_loader)
     print(f"[INFO] Epoch {epoch+1} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f}")
 
-    # --- SAVE BEST MODEL ---
+    # --- SAVE BEST MODEL ONLY ---
     if avg_val_loss < best_val_loss:
         best_val_loss = avg_val_loss
         torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'best_model.pth'))
         torch.save(optimizer.state_dict(), os.path.join(SAVE_DIR, 'best_optim.pth'))
         print(f"[INFO] New best model saved (Val Loss: {avg_val_loss:.4f})")
 
-    # --- SAVE LAST CHECKPOINT (each epoch) ---
-    torch.save(model.state_dict(), os.path.join(SAVE_DIR, f'model_epoch{epoch+1}.pth'))
-    torch.save(optimizer.state_dict(), os.path.join(SAVE_DIR, f'optim_epoch{epoch+1}.pth'))
-
     # --- SAVE TOKENIZER ONCE ---
     if epoch == 0 and RESUME_EPOCH == 0:
         full_dataset.q_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'phobert_tokenizer'))
         full_dataset.a_tokenizer.save_pretrained(os.path.join(SAVE_DIR, 'vit5_tokenizer'))
 
-# === FINAL SAVE ===
-torch.save(model.state_dict(), os.path.join(SAVE_DIR, 'vqagen_final.pth'))
-
-print("[INFO] Training complete. Best & final models saved.")
+print("[INFO] Training complete. Best model saved.")
