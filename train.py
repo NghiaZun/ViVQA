@@ -40,8 +40,8 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 
 # === RESUME FROM CHECKPOINT ===
 if RESUME_EPOCH > 0:
-    model_path = os.path.join(CHECKPOINT_DIR, f'model_epoch{RESUME_EPOCH}.pth')
-    optim_path = os.path.join(CHECKPOINT_DIR, f'optim_epoch{RESUME_EPOCH}.pth')
+    model_path = os.path.join(CHECKPOINT_DIR, f'model_epoch.pth')
+    optim_path = os.path.join(CHECKPOINT_DIR, f'optim_epoch.pth')
     print(f"[INFO] Resuming from epoch {RESUME_EPOCH}...")
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     optimizer.load_state_dict(torch.load(optim_path, map_location=DEVICE))
