@@ -10,7 +10,7 @@ from model import VQAGenModel
 # === CONFIGURATION ===
 CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv'
 IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train'
-CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/V1/checkpoints'
+CHECKPOINT_DIR = '/kaggle/input/checkpoint/transformers/default/1/checkpoints'
 SAVE_DIR = '/kaggle/working/checkpoints'
 os.makedirs(SAVE_DIR, exist_ok=True)
 
@@ -40,8 +40,8 @@ optimizer = torch.optim.AdamW(model.parameters(), lr=LR)
 
 # === RESUME FROM CHECKPOINT ===
 if RESUME_EPOCH > 0:
-    model_path = os.path.join(CHECKPOINT_DIR, f'model_epoch.pth')
-    optim_path = os.path.join(CHECKPOINT_DIR, f'optim_epoch.pth')
+    model_path = os.path.join(CHECKPOINT_DIR, f'best_model.pth')
+    optim_path = os.path.join(CHECKPOINT_DIR, f'best_optim.pth')
     print(f"[INFO] Resuming from epoch {RESUME_EPOCH}...")
     model.load_state_dict(torch.load(model_path, map_location=DEVICE))
     optimizer.load_state_dict(torch.load(optim_path, map_location=DEVICE))
