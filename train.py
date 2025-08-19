@@ -19,7 +19,7 @@ NUM_EPOCHS = 100
 LR = 2e-4
 VAL_SPLIT = 0.1  # 10% data for validation
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-RESUME_EPOCH = 0  # Set > 0 to resume
+RESUME_EPOCH = 30  # Set > 0 to resume
 
 results = []
 
