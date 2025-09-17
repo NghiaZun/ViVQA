@@ -38,7 +38,12 @@ with torch.no_grad():
         input_ids = input_ids.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
 
-        pred_ids = model.generate(pixel_values, input_ids, attention_mask, max_length=32)        
+        pred_ids = model.generate(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            max_length=32
+        )
+
         decoded_preds = vit5_tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
         preds.extend(decoded_preds)
 
