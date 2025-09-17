@@ -75,7 +75,7 @@ class VQAGenModel(nn.Module):
             )
             return outputs
 
-    def generate(self, pixel_values, input_ids, attention_mask, **gen_kwargs):
+    def generate(self, pixel_values, input_ids, attention_mask):
         # Encode image
         vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
 
@@ -94,6 +94,5 @@ class VQAGenModel(nn.Module):
             eos_token_id=self.decoder_tokenizer.eos_token_id,
             max_length=32,
             num_beams=4,
-            early_stopping=True,
-            **gen_kwargs
+            early_stopping=True
         )
