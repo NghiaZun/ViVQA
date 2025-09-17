@@ -75,24 +75,28 @@ class VQAGenModel(nn.Module):
             )
             return outputs
 
-    def generate(self, pixel_values, input_ids, attention_mask):
-        # Encode image
-        vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
+    def generate(self, pixel_values, input_ids, attention_mask=None, **gen_kwargs):
+    # Encode image
+    vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
 
-        # Encode question
-        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = text_out[:, 0, :]  # CLS token
+    # Encode question
+    text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+    text_feats = text_out[:, 0, :]  # CLS token
 
-        # Fusion
-        fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
-        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
+    # Fusion
+    fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
+    fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
 
-        return self.decoder.generate(
-            inputs_embeds=fused,
-            attention_mask=fusion_mask,
-            pad_token_id=self.decoder_tokenizer.pad_token_id,
-            eos_token_id=self.decoder_tokenizer.eos_token_id,
-            max_length=32,
-            num_beams=4,
-            early_stopping=True
-        )
+    # Default gen params nếu chưa truyền
+    gen_kwargs.setdefault("max_length", 32)
+    gen_kwargs.setdefault("num_beams", 4)
+    gen_kwargs.setdefault("early_stopping", True)
+    gen_kwargs.setdefault("pad_token_id", self.decoder_tokenizer.pad_token_id)
+    gen_kwargs.setdefault("eos_token_id", self.decoder_tokenizer.eos_token_id)
+
+    return self.decoder.generate(
+        inputs_embeds=fused,
+        attention_mask=fusion_mask,
+        **gen_kwargs
+    )
+
