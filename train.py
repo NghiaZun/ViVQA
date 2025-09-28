@@ -175,15 +175,23 @@ def run_one_epoch(model, loader, optimizer, scaler, device, cfg, scheduler=None,
         labels = labels.to(device, non_blocking=True)
 
         with torch.set_grad_enabled(train):
-            if cfg.use_amp and train:
-                with autocast(dtype=torch.float16):
+            if train:  # chỉ backward khi train
+                if cfg.use_amp:
+                    with autocast(dtype=torch.float16):
+                        loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
+                        loss = loss / accum_steps
+                    scaler.scale(loss).backward()
+                else:
                     loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
                     loss = loss / accum_steps
-                scaler.scale(loss).backward()
+                    loss.backward()
             else:
-                loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
-                loss = loss / accum_steps
-                loss.backward()
+                # eval: chỉ forward
+                if cfg.use_amp:
+                    with autocast(dtype=torch.float16):
+                        loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
+                else:
+                    loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
 
         if train:
             if (step + 1) % accum_steps == 0:
