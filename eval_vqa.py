@@ -4,7 +4,7 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from nltk.translate.bleu_score import sentence_bleu
+from nltk.translate.bleu_score import sentence_bleu, SmoothingFunction
 
 from transformers import AutoTokenizer, BlipImageProcessor
 from dataset import VQAGenDataset
@@ -37,6 +37,7 @@ print("[INFO] Running evaluation...")
 refs, hyps = [], []
 losses = []
 records = []
+smooth = SmoothingFunction().method1
 
 with torch.no_grad():
     for pixel_values, input_ids, attention_mask, labels in tqdm(test_loader):
@@ -69,18 +70,35 @@ with torch.no_grad():
 avg_loss = np.mean(losses)
 perplexity = np.exp(avg_loss)
 
-bleu_scores = [sentence_bleu([ref.split()], hyp.split()) for ref, hyp in zip(refs, hyps)]
-avg_bleu = np.mean(bleu_scores)
+# BLEU-1, BLEU-2, BLEU-4
+bleu1 = [sentence_bleu([ref.split()], hyp.split(), weights=(1, 0, 0, 0), smoothing_function=smooth)
+         for ref, hyp in zip(refs, hyps)]
+bleu2 = [sentence_bleu([ref.split()], hyp.split(), weights=(0.5, 0.5, 0, 0), smoothing_function=smooth)
+         for ref, hyp in zip(refs, hyps)]
+bleu4 = [sentence_bleu([ref.split()], hyp.split(), smoothing_function=smooth)
+         for ref, hyp in zip(refs, hyps)]
 
+avg_bleu1 = np.mean(bleu1)
+avg_bleu2 = np.mean(bleu2)
+avg_bleu4 = np.mean(bleu4)
+
+# Exact-match accuracy
 acc = np.mean([ref.strip().lower() == hyp.strip().lower() for ref, hyp in zip(refs, hyps)])
 
 print("========== Test Results ==========")
 print(f"Test Loss: {avg_loss:.4f}")
 print(f"Perplexity: {perplexity:.2f}")
-print(f"BLEU: {avg_bleu:.4f}")
+print(f"BLEU-1: {avg_bleu1:.4f}")
+print(f"BLEU-2: {avg_bleu2:.4f}")
+print(f"BLEU-4: {avg_bleu4:.4f}")
 print(f"Accuracy: {acc*100:.2f}%")
 
 # === SAVE CSV ===
-out_csv = os.path.join(SAVE_DIR, "test_predictions.csv")
-pd.DataFrame(records).to_csv(out_csv, index=False)
+out_csv = os.path.join("/kaggle/working", "test_predictions.csv")
+pd.DataFrame(records).to_csv(out_csv, index=False, encoding="utf-8-sig")
 print(f"[INFO] Saved predictions to {out_csv}")
+
+# === PRINT EXAMPLES ===
+print("\n===== Sample Predictions =====")
+for i in range(min(10, len(records))):
+    print(f"Q{i+1} | GT: {records[i]['ground_truth']} || Pred: {records[i]['prediction']}")
