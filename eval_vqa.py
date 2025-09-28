@@ -54,7 +54,10 @@ with torch.no_grad():
         preds = [a_tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
 
         # Ground truth
-        truths = [a_tokenizer.decode(lab, skip_special_tokens=True) for lab in labels]
+        truths = [
+            a_tokenizer.decode([id for id in lab.tolist() if id != -100], skip_special_tokens=True)
+            for lab in labels
+        ]
 
         refs.extend(truths)
         hyps.extend(preds)
