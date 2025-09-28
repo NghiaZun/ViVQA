@@ -1,80 +1,83 @@
+import os
 import torch
 from torch.utils.data import DataLoader
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
+from nltk.translate.bleu_score import sentence_bleu
+
 from transformers import AutoTokenizer, BlipImageProcessor
 from dataset import VQAGenDataset
 from model import VQAGenModel
-from evaluate import load
-from tqdm import tqdm
-import pandas as pd
 
-# --- Config ---
-CSV_PATH = '/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv'
-IMAGE_FOLDER = '/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test'
-BATCH_SIZE = 1
-DEVICE = 'cuda' if torch.cuda.is_available() else 'cpu'
-MODEL_PATH = '/kaggle/input/checkpoint/transformers/default/1/checkpoints/best_model.pth'
-vit5_tokenizer = AutoTokenizer.from_pretrained('VietAI/vit5-base')
+# === CONFIG ===
+TEST_CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
+IMAGE_FOLDER = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"  # đổi nếu folder khác
+SAVE_DIR = "/kaggle/working/checkpoints"
+BATCH_SIZE = 4
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-# --- Load BLEU and ROUGE ---
-bleu = load("bleu")
-rouge = load("rouge")
-
-# --- Dataset ---
-vision_processor = BlipImageProcessor.from_pretrained('Salesforce/blip2-opt-2.7b')
-dataset = VQAGenDataset(CSV_PATH, IMAGE_FOLDER, vision_processor)
-dataloader = DataLoader(dataset, batch_size=BATCH_SIZE)
-
-# --- Model ---
+# === LOAD MODEL ===
+print("[INFO] Loading model...")
 model = VQAGenModel().to(DEVICE)
-model.load_state_dict(torch.load(MODEL_PATH, map_location=DEVICE))
+model.load_state_dict(torch.load(os.path.join(SAVE_DIR, "best_model.pth"), map_location=DEVICE))
 model.eval()
 
-preds, refs = [], []
+# === LOAD TOKENIZERS ===
+q_tokenizer = AutoTokenizer.from_pretrained(os.path.join(SAVE_DIR, "phobert_tokenizer"))
+a_tokenizer = AutoTokenizer.from_pretrained(os.path.join(SAVE_DIR, "vit5_tokenizer"))
+
+# === DATASET ===
+vision_processor = BlipImageProcessor.from_pretrained("Salesforce/blip-vqa-base")
+test_dataset = VQAGenDataset(TEST_CSV_PATH, IMAGE_FOLDER, vision_processor)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+# === EVALUATION LOOP ===
+print("[INFO] Running evaluation...")
+refs, hyps = [], []
+losses = []
+records = []
 
 with torch.no_grad():
-    for batch in tqdm(dataloader):
-        pixel_values, input_ids, attention_mask, labels = batch
+    for pixel_values, input_ids, attention_mask, labels in tqdm(test_loader):
         pixel_values = pixel_values.to(DEVICE)
         input_ids = input_ids.to(DEVICE)
         attention_mask = attention_mask.to(DEVICE)
+        labels = labels.to(DEVICE)
 
-        pred_ids = model.generate(
-            pixel_values=pixel_values,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            max_length=32
-        )
+        # Loss để tham khảo
+        loss, _ = model(pixel_values, input_ids, attention_mask, labels=labels)
+        losses.append(loss.item())
 
+        # Sinh câu trả lời
+        output_ids = model.generate(pixel_values, input_ids, attention_mask)
+        preds = [a_tokenizer.decode(ids, skip_special_tokens=True) for ids in output_ids]
 
-        decoded_preds = vit5_tokenizer.batch_decode(pred_ids, skip_special_tokens=True)
-        preds.extend(decoded_preds)
+        # Ground truth
+        truths = [a_tokenizer.decode(lab, skip_special_tokens=True) for lab in labels]
 
-        if labels is not None:
-            labels = labels.to(DEVICE)
-            decoded_refs = vit5_tokenizer.batch_decode(labels, skip_special_tokens=True)
-            refs.extend(decoded_refs)
+        refs.extend(truths)
+        hyps.extend(preds)
 
-# --- Evaluation ---
-if refs:
-    bleu_score = bleu.compute(predictions=preds, references=[[r] for r in refs])
-    rouge_score = rouge.compute(predictions=preds, references=refs)
-    print("BLEU:", bleu_score)
-    print("ROUGE:", rouge_score)
-else:
-    print("No references found in test set. Only predictions are generated.")
-    for i, pred in enumerate(preds[:10]):
-        print(f"Sample {i+1}: {pred}")
+        for gt, pr in zip(truths, preds):
+            records.append({"ground_truth": gt, "prediction": pr})
 
-# --- Save predictions to CSV ---
-df = pd.read_csv(CSV_PATH)
-df = df.iloc[:len(preds)]  # Đảm bảo số dòng khớp số prediction
+# === METRICS ===
+avg_loss = np.mean(losses)
+perplexity = np.exp(avg_loss)
 
-df['prediction'] = preds
-if refs:
-    df['reference'] = refs
-else:
-    df['reference'] = ""
+bleu_scores = [sentence_bleu([ref.split()], hyp.split()) for ref, hyp in zip(refs, hyps)]
+avg_bleu = np.mean(bleu_scores)
 
-save_path = "predictions.csv"
-df[['question', 'img_id', 'reference', 'prediction']].to_csv(save_path, index=False)
-print(f"Saved predictions to {save_path}")
+acc = np.mean([ref.strip().lower() == hyp.strip().lower() for ref, hyp in zip(refs, hyps)])
+
+print("========== Test Results ==========")
+print(f"Test Loss: {avg_loss:.4f}")
+print(f"Perplexity: {perplexity:.2f}")
+print(f"BLEU: {avg_bleu:.4f}")
+print(f"Accuracy: {acc*100:.2f}%")
+
+# === SAVE CSV ===
+out_csv = os.path.join(SAVE_DIR, "test_predictions.csv")
+pd.DataFrame(records).to_csv(out_csv, index=False)
+print(f"[INFO] Saved predictions to {out_csv}")
