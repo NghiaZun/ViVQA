@@ -13,7 +13,7 @@ from model import VQAGenModel
 # === CONFIG ===
 TEST_CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_FOLDER = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"  # đổi nếu folder khác
-SAVE_DIR = "/kaggle/input/checkpoints/transformers/default/1/checkpoints"
+SAVE_DIR = "/kaggle/input/checkpoints_2/transformers/default/1/checkpoints"
 BATCH_SIZE = 4
 DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
