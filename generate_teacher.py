@@ -94,6 +94,7 @@ for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teache
         continue
 
     res = call_teacher_gpt4o(image_path, question)
+    time.sleep(0.4)
     if res["answer"]:
         results.append({
             "img_id": image_id,
