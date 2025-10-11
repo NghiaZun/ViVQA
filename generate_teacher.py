@@ -52,10 +52,16 @@ def call_teacher_gpt4o(image_path: str, question: str, retry=3) -> dict:
                 model=MODEL_NAME,
                 messages=[
                     {"role": "system", "content": SYSTEM_PROMPT},
-                    {"role": "user", "content": [
-                        {"type": "text", "text": user_prompt},
-                        {"type": "image_url", "image_url": f"data:image/jpeg;base64,{img_b64}"}
-                    ]}
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": user_prompt},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": f"data:image/jpeg;base64,{img_b64}"}
+                            }
+                        ]
+                    }
                 ],
                 max_tokens=150,
                 temperature=0.4,
