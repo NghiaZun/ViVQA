@@ -18,7 +18,7 @@ CSV_PATH  = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 OUT_JSONL = "/kaggle/working/teacher_outputs_offline.jsonl"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-1NUM_SAMPLES = 10  # test subset
+NUM_SAMPLES = 10  # test subset
 
 # ===========================
 # Load model
