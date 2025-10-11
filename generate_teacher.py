@@ -81,7 +81,7 @@ def call_teacher_gpt4o(image_path: str, question: str, retry=3) -> dict:
 # ====================================
 results = []
 for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teacher answers"):
-    image_id = str(row["image_id"])
+    image_id = str(row["img_id"])
     question = str(row["question"])
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     if not os.path.exists(image_path):
@@ -90,7 +90,7 @@ for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teache
     res = call_teacher_gpt4o(image_path, question)
     if res["answer"]:
         results.append({
-            "image_id": image_id,
+            "img_id": image_id,
             "image_path": image_path,
             "question": question,
             "teacher_answer": res["answer"],
