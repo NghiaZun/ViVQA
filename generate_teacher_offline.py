@@ -1,5 +1,6 @@
 """
-Day 1 – Offline Teacher using Qwen2-VL-7B-Instruct
+Day 1 – Offline Teacher using Qwen2-VL-7B-Instruct (Debug version)
+Author: Nghia-Duong (refined by ChatGPT)
 """
 
 import os
@@ -17,6 +18,7 @@ from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
 CSV_PATH  = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 OUT_JSONL = "/kaggle/working/teacher_outputs_offline.jsonl"
+
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 NUM_SAMPLES = 10  # test subset
 
@@ -44,44 +46,74 @@ subset = df.head(NUM_SAMPLES)
 print(f"[INFO] Loaded {len(subset)} samples from ViVQA")
 
 # ===========================
+# Helper: Parse model output
+# ===========================
+def parse_answer_reasoning(text: str):
+    """Try to extract Answer: and Reasoning: flexibly."""
+    answer, reasoning = "", ""
+    lines = [l.strip() for l in text.splitlines() if l.strip()]
+    for line in lines:
+        if line.lower().startswith("answer:"):
+            answer = line.split(":", 1)[1].strip()
+        elif line.lower().startswith("reasoning:"):
+            reasoning = line.split(":", 1)[1].strip()
+    # fallback: nếu không có prefix
+    if not answer and len(lines) > 0:
+        answer = lines[0]
+    if not reasoning and len(lines) > 1:
+        reasoning = " ".join(lines[1:])
+    return answer, reasoning
+
+# ===========================
 # Teacher Function
 # ===========================
 def call_teacher_qwen(image_path: str, question: str):
     try:
         image = Image.open(image_path).convert("RGB")
-    except Exception:
+    except Exception as e:
+        print(f"[WARN] Cannot open image {image_path}: {e}")
         return {"answer": "", "reasoning": "", "raw": ""}
 
     user_prompt = build_fewshot_prompt(question)
-    full_prompt = f"{SYSTEM_PROMPT}\n\n{user_prompt}"
+    full_prompt = (
+        f"{SYSTEM_PROMPT}\n\n"
+        f"Hãy quan sát ảnh và trả lời câu hỏi theo đúng định dạng:\n"
+        f"{user_prompt}\n\n"
+        "Bắt đầu câu trả lời bằng:\nAnswer: ...\nReasoning: ..."
+    )
 
     try:
         inputs = processor(text=full_prompt, images=image, return_tensors="pt").to(device)
-        output = model.generate(**inputs, max_new_tokens=200)
+        with torch.no_grad():
+            output = model.generate(**inputs, max_new_tokens=250)
         text = processor.batch_decode(output, skip_special_tokens=True)[0].strip()
-        print("\n[DEBUG] Raw output sample:\n", text, "\n")
 
-        answer, reasoning = "", ""
-        for line in text.splitlines():
-            if line.lower().startswith("answer:"):
-                answer = line.split(":", 1)[1].strip()
-            elif line.lower().startswith("reasoning:"):
-                reasoning = line.split(":", 1)[1].strip()
+        # debug output
+        print("=" * 80)
+        print(f"[DEBUG] Question: {question}")
+        print(f"[DEBUG] Raw output:\n{text}\n")
+
+        answer, reasoning = parse_answer_reasoning(text)
         return {"answer": answer, "reasoning": reasoning, "raw": text}
 
     except Exception as e:
-        print(f"[WARN] Error: {e}")
+        print(f"[WARN] Generation failed for {image_path}: {e}")
         return {"answer": "", "reasoning": "", "raw": ""}
 
 # ===========================
 # Main loop
 # ===========================
 results = []
+skipped = 0
+
 for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teacher answers"):
-    image_id = str(row["img_id"])
-    question = str(row["question"])
+    image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
+    question = str(row["question"]).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
+
     if not os.path.exists(image_path):
+        print(f"[WARN] Missing image: {image_path}")
+        skipped += 1
         continue
 
     res = call_teacher_qwen(image_path, question)
@@ -94,8 +126,11 @@ for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teache
             "teacher_reasoning": res["reasoning"],
             "teacher_raw": res["raw"]
         })
+    else:
+        skipped += 1
 
-    if len(results) % 10 == 0:
+    # autosave mỗi 5 mẫu
+    if len(results) % 5 == 0:
         with open(OUT_JSONL, "w", encoding="utf-8") as f:
             for r in results:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -105,4 +140,6 @@ with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
+print("=" * 80)
 print(f"[INFO] ✅ Saved {len(results)} reasoning samples to {OUT_JSONL}")
+print(f"[INFO] ⚠️ Skipped {skipped} samples (no output or missing image)")
