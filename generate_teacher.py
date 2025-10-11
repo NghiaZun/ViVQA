@@ -20,7 +20,7 @@ IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 OUT_JSONL = "/kaggle/working/teacher_outputs_day1.jsonl"
 
 MODEL_NAME = "gpt-4o-mini"
-NUM_SAMPLES = 250  # khoảng 250 mẫu/ngày ~250k tokens
+NUM_SAMPLES = 150  # khoảng 250 mẫu/ngày ~250k tokens
 
 # ====================================
 # Init OpenAI
