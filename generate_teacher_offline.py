@@ -77,23 +77,35 @@ def call_teacher_qwen(image_path: str, question: str):
     user_prompt = build_fewshot_prompt(question)
     full_prompt = (
         f"{SYSTEM_PROMPT}\n\n"
-        f"Hãy quan sát ảnh và trả lời câu hỏi theo đúng định dạng:\n"
+        f"Hãy quan sát ảnh và trả lời câu hỏi theo định dạng:\n"
         f"{user_prompt}\n\n"
-        "Bắt đầu câu trả lời bằng:\nAnswer: ...\nReasoning: ..."
+        "Bắt đầu bằng:\nAnswer: ...\nReasoning: ..."
     )
 
     try:
-        inputs = processor(text=full_prompt, images=image, return_tensors="pt").to(device)
-        with torch.no_grad():
-            output = model.generate(**inputs, max_new_tokens=250)
-        text = processor.batch_decode(output, skip_special_tokens=True)[0].strip()
-
-        # debug output
+        # ===> CHỈNH Ở ĐÂY: dùng chat() chứ không dùng generate()
+        response, _ = model.chat(
+            processor,
+            query=full_prompt,
+            image=image,
+            history=None
+        )
+        text = response.strip()
         print("=" * 80)
         print(f"[DEBUG] Question: {question}")
         print(f"[DEBUG] Raw output:\n{text}\n")
 
-        answer, reasoning = parse_answer_reasoning(text)
+        answer, reasoning = "", ""
+        for line in text.splitlines():
+            if line.lower().startswith("answer:"):
+                answer = line.split(":", 1)[1].strip()
+            elif line.lower().startswith("reasoning:"):
+                reasoning = line.split(":", 1)[1].strip()
+        if not answer:
+            answer = text.split(".")[0].strip()
+        if not reasoning:
+            reasoning = " ".join(text.split(".")[1:3]).strip()
+
         return {"answer": answer, "reasoning": reasoning, "raw": text}
 
     except Exception as e:
