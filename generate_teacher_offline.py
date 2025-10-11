@@ -20,7 +20,7 @@ IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 OUT_JSONL = "/kaggle/working/teacher_outputs_offline.jsonl"
 
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-NUM_SAMPLES = 10  # test subset
+NUM_SAMPLES = None  # None = full dataset, hoặc đặt số cụ thể để test
 
 # ===========================
 # Load model
@@ -42,8 +42,13 @@ model.eval()
 # ===========================
 df = pd.read_csv(CSV_PATH)
 df = df.sample(frac=1.0, random_state=42).reset_index(drop=True)
-subset = df.head(NUM_SAMPLES)
-print(f"[INFO] Loaded {len(subset)} samples from ViVQA")
+
+if NUM_SAMPLES is None or NUM_SAMPLES > len(df):
+    subset = df
+else:
+    subset = df.head(NUM_SAMPLES)
+
+print(f"[INFO] Loaded {len(subset)} samples from ViVQA (total={len(df)})")
 
 # ===========================
 # Helper: Parse model output
@@ -57,7 +62,6 @@ def parse_answer_reasoning(text: str):
             answer = line.split(":", 1)[1].strip()
         elif line.lower().startswith("reasoning:"):
             reasoning = line.split(":", 1)[1].strip()
-    # fallback: nếu không có prefix
     if not answer and len(lines) > 0:
         answer = lines[0]
     if not reasoning and len(lines) > 1:
@@ -75,8 +79,8 @@ def call_teacher_qwen(image_path: str, question: str):
         return {"answer": "", "reasoning": "", "raw": ""}
 
     user_prompt = build_fewshot_prompt(question)
-    
-    # ✅ CRITICAL FIX: Use Qwen2-VL's conversation format with image placeholder
+
+    # ✅ Qwen2-VL conversation format
     messages = [
         {
             "role": "system",
@@ -85,27 +89,28 @@ def call_teacher_qwen(image_path: str, question: str):
         {
             "role": "user",
             "content": [
-                {
-                    "type": "image",
-                    "image": image,  # Pass PIL image directly
-                },
+                {"type": "image", "image": image},
                 {
                     "type": "text",
-                    "text": f"Hãy quan sát ảnh và trả lời câu hỏi theo đúng định dạng:\n{user_prompt}\n\nBắt đầu bằng:\nAnswer: ...\nReasoning: ..."
+                    "text": (
+                        "Hãy quan sát ảnh và trả lời câu hỏi theo đúng định dạng:\n"
+                        f"{user_prompt}\n\n"
+                        "Bắt đầu bằng:\nAnswer: ...\nReasoning: ..."
+                    )
                 }
             ]
         }
     ]
 
     try:
-        # ✅ Apply chat template - this creates proper image tokens
+        # ✅ Apply chat template for multimodal encoding
         text_prompt = processor.apply_chat_template(
-            messages, 
-            tokenize=False, 
+            messages,
+            tokenize=False,
             add_generation_prompt=True
         )
-        
-        # ✅ Process with the templated prompt
+
+        # ✅ Process multimodal inputs
         inputs = processor(
             text=[text_prompt],
             images=[image],
@@ -113,7 +118,7 @@ def call_teacher_qwen(image_path: str, question: str):
             return_tensors="pt"
         ).to(device)
 
-        # ✅ Generate with appropriate parameters
+        # ✅ Generate text output
         with torch.no_grad():
             output = model.generate(
                 **inputs,
@@ -124,31 +129,17 @@ def call_teacher_qwen(image_path: str, question: str):
                 top_k=50
             )
 
-        # ✅ Decode only the generated part (skip input tokens)
+        # ✅ Decode only generated tokens
         generated_ids = output[:, inputs.input_ids.shape[1]:]
         text = processor.batch_decode(generated_ids, skip_special_tokens=True)[0].strip()
 
-        # DEBUG
+        # --- DEBUG LOG ---
         print("=" * 80)
         print(f"[DEBUG] Question: {question}")
         print(f"[DEBUG] Raw output:\n{text}\n")
 
-        # Parse answer & reasoning
-        answer, reasoning = "", ""
-        for line in text.splitlines():
-            line_clean = line.strip()
-            if line_clean.lower().startswith("answer:"):
-                answer = line_clean.split(":", 1)[1].strip()
-            elif line_clean.lower().startswith("reasoning:"):
-                reasoning = line_clean.split(":", 1)[1].strip()
-
-        # Fallback parsing
-        if not answer and text:
-            parts = text.split("\n", 1)
-            answer = parts[0].strip()
-            if len(parts) > 1:
-                reasoning = parts[1].strip()
-
+        # --- Parse ---
+        answer, reasoning = parse_answer_reasoning(text)
         return {"answer": answer, "reasoning": reasoning, "raw": text}
 
     except Exception as e:
@@ -157,12 +148,10 @@ def call_teacher_qwen(image_path: str, question: str):
         traceback.print_exc()
         return {"answer": "", "reasoning": "", "raw": ""}
 
-
 # ===========================
 # Main loop
 # ===========================
-results = []
-skipped = 0
+results, skipped = [], 0
 
 for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teacher answers"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
@@ -187,13 +176,15 @@ for _, row in tqdm(subset.iterrows(), total=len(subset), desc="Generating teache
     else:
         skipped += 1
 
-    # autosave mỗi 5 mẫu
-    if len(results) % 5 == 0:
+    # Autosave every 10 samples
+    if len(results) % 10 == 0:
         with open(OUT_JSONL, "w", encoding="utf-8") as f:
             for r in results:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-# Save cuối
+# ===========================
+# Final save
+# ===========================
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
@@ -201,3 +192,4 @@ with open(OUT_JSONL, "w", encoding="utf-8") as f:
 print("=" * 80)
 print(f"[INFO] ✅ Saved {len(results)} reasoning samples to {OUT_JSONL}")
 print(f"[INFO] ⚠️ Skipped {skipped} samples (no output or missing image)")
+print(f"[INFO] Dataset size: {len(df)}, Processed subset: {len(subset)}")
