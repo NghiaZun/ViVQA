@@ -18,7 +18,7 @@ CSV_PATH  = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 OUT_JSONL = "/kaggle/working/teacher_outputs_offline.jsonl"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-NUM_SAMPLES = 80  # test subset
+1NUM_SAMPLES = 10  # test subset
 
 # ===========================
 # Load model
@@ -59,6 +59,7 @@ def call_teacher_qwen(image_path: str, question: str):
         inputs = processor(text=full_prompt, images=image, return_tensors="pt").to(device)
         output = model.generate(**inputs, max_new_tokens=200)
         text = processor.batch_decode(output, skip_special_tokens=True)[0].strip()
+        print("\n[DEBUG] Raw output sample:\n", text, "\n")
 
         answer, reasoning = "", ""
         for line in text.splitlines():
