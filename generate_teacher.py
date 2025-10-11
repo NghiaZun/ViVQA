@@ -7,6 +7,7 @@ import os
 import base64
 import time
 import json
+import random
 import pandas as pd
 from tqdm import tqdm
 from openai import OpenAI
@@ -40,14 +41,14 @@ print(f"[INFO] Loaded {len(subset)} samples from ViVQA")
 # ====================================
 # Teacher Function
 # ====================================
-def call_teacher_gpt4o(image_path: str, question: str, retry=3) -> dict:
-    """Call GPT-4o-mini to generate Answer + Reasoning in Vietnamese"""
+def call_teacher_gpt4o(image_path: str, question: str, retry=5) -> dict:
     with open(image_path, "rb") as f:
         img_b64 = base64.b64encode(f.read()).decode("utf-8")
 
     user_prompt = build_fewshot_prompt(question)
+    backoff = 2  # giây
 
-    for _ in range(retry):
+    for attempt in range(retry):
         try:
             response = client.chat.completions.create(
                 model=MODEL_NAME,
@@ -69,7 +70,6 @@ def call_teacher_gpt4o(image_path: str, question: str, retry=3) -> dict:
             )
             content = response.choices[0].message.content.strip()
 
-            # parse “Answer:” và “Reasoning:” nếu có
             answer, reasoning = "", ""
             for line in content.splitlines():
                 if line.lower().startswith("answer:"):
@@ -78,10 +78,20 @@ def call_teacher_gpt4o(image_path: str, question: str, retry=3) -> dict:
                     reasoning = line.split(":", 1)[1].strip()
 
             return {"answer": answer, "reasoning": reasoning, "raw": content}
+
         except Exception as e:
-            print(f"[WARN] Error: {e}")
-            sleep(2)
+            err_msg = str(e)
+            print(f"[WARN] Error: {err_msg}")
+            # Nếu bị rate limit -> ngủ lâu hơn
+            if "rate_limit" in err_msg or "429" in err_msg:
+                sleep_time = backoff + random.uniform(0, 1)
+                print(f"[INFO] 💤 Rate limit hit — sleeping {sleep_time:.1f}s...")
+                time.sleep(sleep_time)
+                backoff = min(backoff * 2, 60)  # tăng dần, tối đa 1 phút
+            else:
+                time.sleep(2)
     return {"answer": "", "reasoning": "", "raw": ""}
+
 
 # ====================================
 # Main loop
