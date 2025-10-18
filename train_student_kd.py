@@ -17,7 +17,6 @@ from model import VQAGenModel
 # =====================
 DATA_PATH = "/kaggle/input/teacher/Qwen2-VL-7B-Instruct.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-CHECKPOINT_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints"   # checkpoint cũ nếu có
 SAVE_PATH = "/kaggle/working/vqa_student_kd.pt"
 EPOCHS = 2
 LR = 2e-5
@@ -69,13 +68,11 @@ class DistillDataset(Dataset):
 # LOAD MODEL
 # =====================
 print("[INFO] Loading VQAGenModel...")
-model = VQAGenModel()
-if os.path.exists(CHECKPOINT_DIR):
-    ckpt_files = [f for f in os.listdir(CHECKPOINT_DIR) if f.endswith(".pt") or f.endswith(".bin")]
-    if ckpt_files:
-        ckpt_path = os.path.join(CHECKPOINT_DIR, ckpt_files[0])
-        model.load_state_dict(torch.load(ckpt_path, map_location=device))
-        print(f"[INFO] Loaded checkpoint from {ckpt_path}")
+model = VQAGenModel(
+    phobert_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
+)
+model.load_state_dict(torch.load("/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/best_model.pth"))
 model.to(device)
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
