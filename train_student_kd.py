@@ -53,23 +53,25 @@ class DistillDataset(Dataset):
 
     def __getitem__(self, idx):
         s = self.samples[idx]
-        q = s["input"].split("Câu hỏi:")[-1].split("Ảnh:")[0].strip()
-        img_path = s["input"].split("Ảnh:")[-1].strip()
-        answer = s["output"]["answer"]
-        reasoning = s["output"]["reasoning"]
-
+    
+        # Cập nhật theo định dạng Day1 output
+        q = s["question"]
+        img_path = s["image_path"]
+        answer = s.get("teacher_answer", "")
+        reasoning = s.get("teacher_reasoning", "")
+    
         try:
             image = Image.open(img_path).convert("RGB")
         except:
             image = Image.new("RGB", (224, 224), (255, 255, 255))
-
+    
         pixel_values = self.vision_processor(image, return_tensors="pt").pixel_values[0]
         q_enc = self.text_tokenizer(q, truncation=True, padding="max_length",
                                     max_length=self.max_q_len, return_tensors="pt")
         label_text = f"{answer}. Giải thích: {reasoning}"
         labels = self.decoder_tokenizer(label_text, truncation=True, padding="max_length",
                                         max_length=self.max_a_len, return_tensors="pt").input_ids[0]
-
+    
         return {
             "pixel_values": pixel_values,
             "input_ids": q_enc.input_ids[0],
