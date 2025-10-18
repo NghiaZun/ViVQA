@@ -15,9 +15,9 @@ from vqagen_model import VQAGenModel
 # =====================
 # CONFIG
 # =====================
-DATA_PATH = "/kaggle/input/qwen-teacher/train_student.jsonl"
+DATA_PATH = "/kaggle/input/teacher/Qwen2-VL-7B-Instruct.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-CHECKPOINT_DIR = "/kaggle/input/vqagen-checkpoint"   # checkpoint cũ nếu có
+CHECKPOINT_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints"   # checkpoint cũ nếu có
 SAVE_PATH = "/kaggle/working/vqa_student_kd.pt"
 EPOCHS = 2
 LR = 2e-5
