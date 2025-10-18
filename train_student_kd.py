@@ -69,7 +69,7 @@ class DistillDataset(Dataset):
 # =====================
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
-    phobert_dir = "/vinai/phobert-base",
+    phobert_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
     vit5_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
 )
 model.load_state_dict(torch.load("/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/best_model.pth"))
