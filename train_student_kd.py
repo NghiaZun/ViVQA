@@ -18,7 +18,7 @@ from model import VQAGenModel
 DATA_PATH = "/kaggle/input/teacher/Qwen2-VL-7B-Instruct.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 SAVE_PATH = "/kaggle/working/vqa_student_kd.pt"
-EPOCHS = 2
+EPOCHS = 60
 LR = 2e-5
 ALPHA = 0.8
 BATCH_SIZE = 2
@@ -69,8 +69,8 @@ class DistillDataset(Dataset):
 # =====================
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
-    phobert_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="vinai/phobert-base",
+    vit5_dir="VietAI/vit5-base"
 )
 model.load_state_dict(torch.load("/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/best_model.pth"))
 model.to(device)
