@@ -1,3 +1,4 @@
+import os
 import torch
 from torch import nn
 from transformers import (
@@ -24,9 +25,21 @@ class VQAGenModel(nn.Module):
         # ============================
         # Text Encoder (PhoBERT)
         # ============================
-        print(f"[INFO] Loading PhoBERT from {phobert_dir} ...")
-        self.text_encoder = AutoModel.from_pretrained(phobert_dir)
-        self.text_tokenizer = AutoTokenizer.from_pretrained(phobert_dir, use_fast=False)
+        print(f"[INFO] Loading PhoBERT tokenizer & model...")
+
+        # ✅ Nếu local chỉ có tokenizer → load model từ HF
+        if not any(fname.endswith((".bin", ".safetensors")) for fname in os.listdir(phobert_dir)):
+            print(f"[WARN] No model weights found in {phobert_dir}, loading PhoBERT from HuggingFace Hub...")
+            self.text_encoder = AutoModel.from_pretrained("vinai/phobert-base")
+        else:
+            self.text_encoder = AutoModel.from_pretrained(phobert_dir)
+
+        # ✅ Load tokenizer (ưu tiên local)
+        try:
+            self.text_tokenizer = AutoTokenizer.from_pretrained(phobert_dir, use_fast=False)
+        except Exception:
+            print("[WARN] Failed to load PhoBERT tokenizer locally → using vinai/phobert-base")
+            self.text_tokenizer = AutoTokenizer.from_pretrained("vinai/phobert-base", use_fast=False)
 
         # ============================
         # Fusion Layer
@@ -43,10 +56,25 @@ class VQAGenModel(nn.Module):
         # ============================
         # Decoder (VietT5)
         # ============================
-        print(f"[INFO] Loading VietT5 from {vit5_dir} ...")
-        self.decoder = AutoModelForSeq2SeqLM.from_pretrained(vit5_dir)
-        self.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_dir, use_fast=False)
+        print(f"[INFO] Loading VietT5 tokenizer & model...")
 
+        # ✅ Nếu local chỉ có tokenizer → load model từ HF
+        if not any(fname.endswith((".bin", ".safetensors")) for fname in os.listdir(vit5_dir)):
+            print(f"[WARN] No model weights found in {vit5_dir}, loading VietT5 from HuggingFace Hub...")
+            self.decoder = AutoModelForSeq2SeqLM.from_pretrained("VietAI/vit5-base")
+        else:
+            self.decoder = AutoModelForSeq2SeqLM.from_pretrained(vit5_dir)
+
+        # ✅ Load tokenizer (ưu tiên local)
+        try:
+            self.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_dir, use_fast=False)
+        except Exception:
+            print("[WARN] Failed to load VietT5 tokenizer locally → using VietAI/vit5-base")
+            self.decoder_tokenizer = AutoTokenizer.from_pretrained("VietAI/vit5-base", use_fast=False)
+
+    # ============================
+    # Forward
+    # ============================
     def forward(self, pixel_values, input_ids, attention_mask, labels=None):
         # Encode image
         vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
@@ -84,6 +112,9 @@ class VQAGenModel(nn.Module):
             )
             return outputs
 
+    # ============================
+    # Generate
+    # ============================
     def generate(self, pixel_values, input_ids, attention_mask=None, **gen_kwargs):
         vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
         text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
