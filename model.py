@@ -9,19 +9,28 @@ from transformers import (
 class VQAGenModel(nn.Module):
     def __init__(self,
                  vision_model_name="Salesforce/blip-vqa-base",
-                 text_model_name="vinai/phobert-base",
-                 decoder_model_name="VietAI/vit5-base",
+                 phobert_dir="/kaggle/input/vqagen-checkpoint/phobert",
+                 vit5_dir="/kaggle/input/vqagen-checkpoint/vit5",
                  hidden_dim=768):
         super().__init__()
 
-        # Vision encoder (ViT-B from BLIP)
+        # ============================
+        # Vision Encoder (BLIP ViT)
+        # ============================
+        print("[INFO] Loading BLIP vision encoder...")
         blip = BlipForQuestionAnswering.from_pretrained(vision_model_name)
         self.vision_encoder = blip.vision_model
 
-        # Text encoder (PhoBERT)
-        self.text_encoder = AutoModel.from_pretrained(text_model_name)
+        # ============================
+        # Text Encoder (PhoBERT)
+        # ============================
+        print(f"[INFO] Loading PhoBERT from {phobert_dir} ...")
+        self.text_encoder = AutoModel.from_pretrained(phobert_dir)
+        self.text_tokenizer = AutoTokenizer.from_pretrained(phobert_dir, use_fast=False)
 
-        # Fusion layer: [vision_feats; text_feats] → hidden_dim
+        # ============================
+        # Fusion Layer
+        # ============================
         self.fusion = nn.Sequential(
             nn.Linear(hidden_dim * 2, hidden_dim * 2),
             nn.ReLU(),
@@ -31,28 +40,28 @@ class VQAGenModel(nn.Module):
             nn.Dropout(0.1)
         )
 
-        # Decoder (VietT5-base via AutoModel)
-        self.decoder = AutoModelForSeq2SeqLM.from_pretrained(decoder_model_name)
-
-        # Tokenizers
-        self.text_tokenizer = AutoTokenizer.from_pretrained(text_model_name)
-        self.decoder_tokenizer = AutoTokenizer.from_pretrained(decoder_model_name)
+        # ============================
+        # Decoder (VietT5)
+        # ============================
+        print(f"[INFO] Loading VietT5 from {vit5_dir} ...")
+        self.decoder = AutoModelForSeq2SeqLM.from_pretrained(vit5_dir)
+        self.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_dir, use_fast=False)
 
     def forward(self, pixel_values, input_ids, attention_mask, labels=None):
         # Encode image
         vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
         vision_feats = vision_out.mean(dim=1)  # (B, hidden_dim)
 
-        # Encode question (use CLS token from PhoBERT)
+        # Encode question (CLS token from PhoBERT)
         text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
         text_feats = text_out[:, 0, :]  # CLS token
 
-        # Fusion: concat & project
-        fused = torch.cat([vision_feats, text_feats], dim=-1)  # (B, hidden_dim*2)
-        fused = self.fusion(fused).unsqueeze(1)  # (B, 1, hidden_dim)
-        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)  # (B, 1)
+        # Fusion
+        fused = torch.cat([vision_feats, text_feats], dim=-1)
+        fused = self.fusion(fused).unsqueeze(1)
+        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
 
-        # Encode for decoder
+        # Decode
         encoder = self.decoder.get_encoder()
         encoder_outputs = encoder(inputs_embeds=fused, attention_mask=fusion_mask)
 
@@ -76,29 +85,20 @@ class VQAGenModel(nn.Module):
             return outputs
 
     def generate(self, pixel_values, input_ids, attention_mask=None, **gen_kwargs):
-    # Encode image
         vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
-    
-        # Encode question
         text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = text_out[:, 0, :]  # CLS token
-    
-        # Fusion
+        text_feats = text_out[:, 0, :]
         fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
         fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
-    
-        # Default gen params nếu chưa truyền
+
         gen_kwargs.setdefault("max_length", 32)
         gen_kwargs.setdefault("num_beams", 4)
         gen_kwargs.setdefault("early_stopping", True)
         gen_kwargs.setdefault("pad_token_id", self.decoder_tokenizer.pad_token_id)
         gen_kwargs.setdefault("eos_token_id", self.decoder_tokenizer.eos_token_id)
-    
+
         return self.decoder.generate(
             inputs_embeds=fused,
             attention_mask=fusion_mask,
             **gen_kwargs
         )
-if __name__ == "__main__":
-    model = VQAGenModel()
-    print("Loaded VQAGenModel successfully")
