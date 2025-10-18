@@ -99,4 +99,6 @@ class VQAGenModel(nn.Module):
             attention_mask=fusion_mask,
             **gen_kwargs
         )
-
+if __name__ == "__main__":
+    model = VQAGenModel()
+    print("Loaded VQAGenModel successfully")
