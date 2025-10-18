@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from PIL import Image
 from transformers import BlipProcessor
-from vqagen_model import VQAGenModel
+from model import VQAGenModel
 
 # =====================
 # CONFIG
