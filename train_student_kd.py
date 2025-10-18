@@ -83,10 +83,11 @@ class DistillDataset(Dataset):
 # LOAD MODEL
 # =====================
 print("[INFO] Loading VQAGenModel...")
+print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    text_model_name="vinai/phobert-base",
-    decoder_model_name="VietAI/vit5-base"
+    phobert_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
 )
 
 # Nếu bạn có checkpoint từ KD giai đoạn 3
