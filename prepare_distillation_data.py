@@ -13,7 +13,7 @@ import matplotlib.pyplot as plt
 # ==============================
 # Config
 # ==============================
-IN_JSONL = "/kaggle/input/qwen2-vl-7b-instruct/Qwen2-VL-7B-Instruct.jsonl"  # đổi đúng đường dẫn
+IN_JSONL = "/kaggle/input/teacher/Qwen2-VL-7B-Instruct.jsonl"  # đổi đúng đường dẫn
 OUT_CLEAN = "/kaggle/working/cleaned_teacher.jsonl"
 OUT_STATS = "/kaggle/working/teacher_reasoning_stats.csv"
 OUT_TRAIN = "/kaggle/working/train_student.jsonl"
