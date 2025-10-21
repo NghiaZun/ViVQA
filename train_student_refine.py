@@ -86,8 +86,8 @@ class DistillDataset(Dataset):
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/vqagen-checkpoint/phobert",
-    vit5_dir="/kaggle/input/vqagen-checkpoint/vit5"
+    phobert_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
 )
 model.load_state_dict(torch.load(MODEL_CKPT, map_location=device))
 model.to(device)
