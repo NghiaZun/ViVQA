@@ -19,7 +19,7 @@ from model import VQAGenModel
 # =========================
 DATA_PATH = "/kaggle/input/teacher/Qwen2-VL-7B-Instruct.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-MODEL_CKPT = "/kaggle/input/vqa-student/vqa_student_best.pt"
+MODEL_CKPT = "/kaggle/input/checkpoint/pytorch/default/1/vqa_student_best.pt"
 SAVE_DIR = "/kaggle/working"
 SAVE_PATH = os.path.join(SAVE_DIR, "vqa_student_refined.pt")
 
