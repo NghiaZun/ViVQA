@@ -1,12 +1,12 @@
 """
 Day 6.4 — Evaluation Final: Teacher vs Student vs Ground Truth
-Author: Hân (revised)
+Author: Hân (revised by ChatGPT)
 """
 
 import os
 import re
 import json
-import string
+import math
 import pandas as pd
 from tqdm import tqdm
 from PIL import Image
@@ -49,12 +49,13 @@ def extract_answer(text):
         return m.group(1).strip()
     return text.strip()
 
+
 def normalize_text(s):
     """Chuẩn hóa để tính metric, giữ nguyên dấu câu và dấu tiếng Việt."""
     if not isinstance(s, str):
         return ""
-    s = s.lower().strip()
-    s = re.sub(r"\s+", " ", s)  # gom khoảng trắng dư
+    s = s.strip().lower()
+    s = re.sub(r"\s+", " ", s)
     return s
 
 
@@ -71,6 +72,7 @@ teacher_model = AutoModelForVision2Seq.from_pretrained(
 )
 teacher_model.eval()
 
+
 def infer_teacher(image, question):
     messages = [
         {"role": "system", "content": "Bạn là mô hình VQA tiếng Việt, trả lời có reasoning."},
@@ -84,6 +86,7 @@ def infer_teacher(image, question):
     with torch.no_grad():
         output = teacher_model.generate(**inputs, max_new_tokens=200, temperature=0.7, top_p=0.9)
     return teacher_processor.batch_decode(output, skip_special_tokens=True)[0].strip()
+
 
 # ===============================
 # 2️⃣ Load Student
@@ -99,6 +102,7 @@ student.load_state_dict(torch.load(STUDENT_CKPT, map_location=device))
 student.to(device)
 student.eval()
 
+
 def infer_student(image, question):
     pixel_values = vision_processor(image, return_tensors="pt").pixel_values.to(device)
     q_enc = student.text_tokenizer(question, return_tensors="pt", truncation=True, padding=True).to(device)
@@ -112,11 +116,12 @@ def infer_student(image, question):
         )
     return student.decoder_tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
 
+
 # ===============================
 # 3️⃣ Inference on Test Set
 # ===============================
 df = pd.read_csv(DATA_PATH)
-df = df.head(100)  # sample subset
+df = df.head(100)
 records = []
 
 for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
@@ -156,19 +161,38 @@ df_out["ground_truth_norm"] = df_out["ground_truth"].apply(normalize_text)
 df_out["teacher_norm"] = df_out["teacher_answer"].apply(normalize_text)
 df_out["student_norm"] = df_out["student_answer"].apply(normalize_text)
 
-ground_truths = df_out["ground_truth_norm"].tolist()
-teacher_preds = df_out["teacher_norm"].tolist()
-student_preds = df_out["student_norm"].tolist()
+# Bỏ các mẫu trống để tránh lỗi chia 0
+df_valid = df_out[
+    (df_out["ground_truth_norm"].str.len() > 0)
+    & (df_out["teacher_norm"].str.len() > 0)
+    & (df_out["student_norm"].str.len() > 0)
+]
 
-# Teacher vs GT
-teacher_bleu = bleu.compute(predictions=teacher_preds, references=ground_truths, smooth=True)["bleu"]
-teacher_rouge = rouge.compute(predictions=teacher_preds, references=ground_truths)["rougeL"]
-teacher_bert = sum(bertscore.compute(predictions=teacher_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
+if len(df_valid) == 0:
+    raise ValueError("Không có mẫu hợp lệ để tính BLEU / ROUGE / BERTScore.")
 
-# Student vs GT
-student_bleu = bleu.compute(predictions=student_preds, references=ground_truths, smooth=True)["bleu"]
-student_rouge = rouge.compute(predictions=student_preds, references=ground_truths)["rougeL"]
-student_bert = sum(bertscore.compute(predictions=student_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
+ground_truths = df_valid["ground_truth_norm"].tolist()
+teacher_preds = df_valid["teacher_norm"].tolist()
+student_preds = df_valid["student_norm"].tolist()
+
+# Hàm tính metric an toàn
+def safe_compute(metric, predictions, references, **kwargs):
+    try:
+        return metric.compute(predictions=predictions, references=references, **kwargs)
+    except ZeroDivisionError:
+        return {list(metric.features.keys())[0]: 0.0}
+
+teacher_bleu = safe_compute(bleu, teacher_preds, ground_truths, smooth=True)["bleu"]
+teacher_rouge = safe_compute(rouge, teacher_preds, ground_truths)["rougeL"]
+teacher_bert = sum(
+    bertscore.compute(predictions=teacher_preds, references=ground_truths, lang="vi")["f1"]
+) / len(ground_truths)
+
+student_bleu = safe_compute(bleu, student_preds, ground_truths, smooth=True)["bleu"]
+student_rouge = safe_compute(rouge, student_preds, ground_truths)["rougeL"]
+student_bert = sum(
+    bertscore.compute(predictions=student_preds, references=ground_truths, lang="vi")["f1"]
+) / len(ground_truths)
 
 # ===============================
 # 5️⃣ Print Summary
