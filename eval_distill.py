@@ -26,8 +26,8 @@ SAVE_PATH = "/kaggle/working/vqa_eval_teacher_student.csv"
 # Model paths
 TEACHER_ID = "Qwen/Qwen2-VL-7B-Instruct"
 STUDENT_CKPT = "/kaggle/input/vqa-student/vqa_student_best.pt"
-PHOBERT_DIR = "/kaggle/input/vqagen-checkpoint/phobert"
-VIT5_DIR = "/kaggle/input/vqagen-checkpoint/vit5"
+PHOBERT_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer"
+VIT5_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
 VISION_MODEL = "Salesforce/blip-vqa-base"
 
 # Load metrics
