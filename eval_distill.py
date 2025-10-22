@@ -50,13 +50,13 @@ def extract_answer(text):
     return text.strip()
 
 def normalize_text(s):
-    """Chuẩn hóa để tính metric."""
+    """Chuẩn hóa để tính metric, giữ nguyên dấu câu và dấu tiếng Việt."""
     if not isinstance(s, str):
         return ""
     s = s.lower().strip()
-    s = s.translate(str.maketrans("", "", string.punctuation))
-    s = re.sub(r"\s+", " ", s)
+    s = re.sub(r"\s+", " ", s)  # gom khoảng trắng dư
     return s
+
 
 # ===============================
 # 1️⃣ Load Teacher
