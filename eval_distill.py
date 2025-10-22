@@ -1,10 +1,12 @@
 """
 Day 6.4 — Evaluation Final: Teacher vs Student vs Ground Truth
-Author: Hân
+Author: Hân (revised)
 """
 
 import os
+import re
 import json
+import string
 import pandas as pd
 from tqdm import tqdm
 from PIL import Image
@@ -34,6 +36,27 @@ VISION_MODEL = "Salesforce/blip-vqa-base"
 bleu = load("bleu")
 rouge = load("rouge")
 bertscore = load("bertscore")
+
+# ===============================
+# Helper functions
+# ===============================
+def extract_answer(text):
+    """Lấy phần sau 'Answer:' và bỏ phần Reasoning."""
+    if not isinstance(text, str):
+        return ""
+    m = re.search(r"Answer\s*[:：]\s*(.*?)(?:Reasoning|$)", text, re.IGNORECASE | re.DOTALL)
+    if m:
+        return m.group(1).strip()
+    return text.strip()
+
+def normalize_text(s):
+    """Chuẩn hóa để tính metric."""
+    if not isinstance(s, str):
+        return ""
+    s = s.lower().strip()
+    s = s.translate(str.maketrans("", "", string.punctuation))
+    s = re.sub(r"\s+", " ", s)
+    return s
 
 # ===============================
 # 1️⃣ Load Teacher
@@ -93,7 +116,7 @@ def infer_student(image, question):
 # 3️⃣ Inference on Test Set
 # ===============================
 df = pd.read_csv(DATA_PATH)
-df = df.head(100)  # test subset for Kaggle runtime
+df = df.head(100)  # sample subset
 records = []
 
 for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
@@ -123,34 +146,40 @@ df_out.to_csv(SAVE_PATH, index=False)
 print(f"[INFO] ✅ Saved predictions → {SAVE_PATH}")
 
 # ===============================
-# 4️⃣ Compute Metrics (per model)
+# 4️⃣ Clean answers & Compute Metrics
 # ===============================
-print("[INFO] Computing metrics...")
+print("[INFO] Cleaning text and computing metrics...")
 
-ground_truths = df_out["ground_truth"].tolist()
-teacher_preds = df_out["teacher_output"].tolist()
-student_preds = df_out["student_output"].tolist()
+df_out["teacher_answer"] = df_out["teacher_output"].apply(extract_answer)
+df_out["student_answer"] = df_out["student_output"].apply(extract_answer)
+df_out["ground_truth_norm"] = df_out["ground_truth"].apply(normalize_text)
+df_out["teacher_norm"] = df_out["teacher_answer"].apply(normalize_text)
+df_out["student_norm"] = df_out["student_answer"].apply(normalize_text)
+
+ground_truths = df_out["ground_truth_norm"].tolist()
+teacher_preds = df_out["teacher_norm"].tolist()
+student_preds = df_out["student_norm"].tolist()
 
 # Teacher vs GT
-teacher_bleu = bleu.compute(predictions=teacher_preds, references=ground_truths)["bleu"]
+teacher_bleu = bleu.compute(predictions=teacher_preds, references=ground_truths, smooth=True)["bleu"]
 teacher_rouge = rouge.compute(predictions=teacher_preds, references=ground_truths)["rougeL"]
-teacher_bert = sum(load("bertscore").compute(predictions=teacher_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
+teacher_bert = sum(bertscore.compute(predictions=teacher_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
 
 # Student vs GT
-student_bleu = bleu.compute(predictions=student_preds, references=ground_truths)["bleu"]
+student_bleu = bleu.compute(predictions=student_preds, references=ground_truths, smooth=True)["bleu"]
 student_rouge = rouge.compute(predictions=student_preds, references=ground_truths)["rougeL"]
-student_bert = sum(load("bertscore").compute(predictions=student_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
+student_bert = sum(bertscore.compute(predictions=student_preds, references=ground_truths, lang="vi")["f1"]) / len(ground_truths)
 
 # ===============================
 # 5️⃣ Print Summary
 # ===============================
-print("\n=========== FINAL EVALUATION REPORT ===========")
+print("\n=========== FINAL EVALUATION REPORT (CLEANED) ===========")
 print(f"{'Metric':<15} | {'Teacher':>10} | {'Student':>10}")
 print("-" * 42)
 print(f"{'BLEU':<15} | {teacher_bleu:>10.4f} | {student_bleu:>10.4f}")
 print(f"{'ROUGE-L':<15} | {teacher_rouge:>10.4f} | {student_rouge:>10.4f}")
 print(f"{'BERTScore (F1)':<15} | {teacher_bert:>10.4f} | {student_bert:>10.4f}")
-print("===============================================\n")
+print("==========================================================\n")
 
 summary = {
     "Teacher": {"BLEU": teacher_bleu, "ROUGE-L": teacher_rouge, "BERTScore": teacher_bert},
@@ -158,5 +187,3 @@ summary = {
 }
 json.dump(summary, open("/kaggle/working/metrics_summary.json", "w"), indent=2, ensure_ascii=False)
 print("[INFO] 📊 Saved metrics_summary.json for report.")
-
-
