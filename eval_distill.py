@@ -1,12 +1,11 @@
 """
 Day 6.4 — Evaluation Final: Teacher vs Student vs Ground Truth
-Author: Hân (revised by ChatGPT)
+Author: Hân (revised and fixed by ChatGPT)
 """
 
 import os
 import re
 import json
-import math
 import pandas as pd
 from tqdm import tqdm
 from PIL import Image
@@ -23,16 +22,14 @@ print(f"[INFO] Device: {device}")
 
 DATA_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
-SAVE_PATH = "/kaggle/working/vqa_eval_teacher_student.csv"
+SAVE_PATH = "/kaggle/working/vqa_eval_teacher_student_fixed.csv"
 
-# Model paths
 TEACHER_ID = "Qwen/Qwen2-VL-7B-Instruct"
 STUDENT_CKPT = "/kaggle/input/checkpoint/pytorch/default/1/vqa_student_best.pt"
 PHOBERT_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer"
 VIT5_DIR = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
 VISION_MODEL = "Salesforce/blip-vqa-base"
 
-# Load metrics
 bleu = load("bleu")
 rouge = load("rouge")
 bertscore = load("bertscore")
@@ -41,7 +38,6 @@ bertscore = load("bertscore")
 # Helper functions
 # ===============================
 def extract_answer(text):
-    """Lấy phần sau 'Answer:' và bỏ phần Reasoning."""
     if not isinstance(text, str):
         return ""
     m = re.search(r"Answer\s*[:：]\s*(.*?)(?:Reasoning|$)", text, re.IGNORECASE | re.DOTALL)
@@ -49,20 +45,25 @@ def extract_answer(text):
         return m.group(1).strip()
     return text.strip()
 
+def split_answer_reasoning(text):
+    if not isinstance(text, str):
+        return "", ""
+    ans = extract_answer(text)
+    rea = ""
+    m = re.search(r"Reasoning\s*[:：]\s*(.*)", text, re.IGNORECASE | re.DOTALL)
+    if m:
+        rea = m.group(1).strip()
+    return ans, rea
 
 def normalize_text(s):
-    """Chuẩn hóa để tính metric, giữ nguyên dấu câu và dấu tiếng Việt."""
     if not isinstance(s, str):
         return ""
-    s = s.strip().lower()
-    s = re.sub(r"\s+", " ", s)
-    return s
-
+    return re.sub(r"\s+", " ", s.strip().lower())
 
 # ===============================
-# 1️⃣ Load Teacher
+# Load Teacher
 # ===============================
-print("[INFO] Loading Teacher (Qwen2-VL-7B-Instruct)...")
+print("[INFO] Loading Teacher Model...")
 teacher_processor = AutoProcessor.from_pretrained(TEACHER_ID, trust_remote_code=True)
 teacher_model = AutoModelForVision2Seq.from_pretrained(
     TEACHER_ID,
@@ -72,26 +73,19 @@ teacher_model = AutoModelForVision2Seq.from_pretrained(
 )
 teacher_model.eval()
 
-
 def infer_teacher(image, question):
-    messages = [
-        {"role": "system", "content": "Bạn là mô hình VQA tiếng Việt, trả lời có reasoning."},
-        {"role": "user", "content": [
-            {"type": "image", "image": image},
-            {"type": "text", "text": f"Trả lời dạng:\nAnswer: ...\nReasoning: ...\nCâu hỏi: {question}"}
-        ]}
-    ]
-    text_prompt = teacher_processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
-    inputs = teacher_processor(text=[text_prompt], images=[image], return_tensors="pt").to(device)
+    prompt = f"Trả lời dạng:\nAnswer: ...\nReasoning: ...\nCâu hỏi: {question}\nAnswer:"
+    inputs = teacher_processor(text=[prompt], images=[image], return_tensors="pt").to(device)
     with torch.no_grad():
-        output = teacher_model.generate(**inputs, max_new_tokens=200, temperature=0.7, top_p=0.9)
-    return teacher_processor.batch_decode(output, skip_special_tokens=True)[0].strip()
-
+        out = teacher_model.generate(
+            **inputs, max_new_tokens=80, temperature=0.2, top_p=0.95
+        )
+    return teacher_processor.batch_decode(out, skip_special_tokens=True)[0].strip()
 
 # ===============================
-# 2️⃣ Load Student
+# Load Student
 # ===============================
-print("[INFO] Loading Student...")
+print("[INFO] Loading Student Model...")
 vision_processor = BlipProcessor.from_pretrained(VISION_MODEL)
 student = VQAGenModel(
     vision_model_name=VISION_MODEL,
@@ -102,112 +96,91 @@ student.load_state_dict(torch.load(STUDENT_CKPT, map_location=device))
 student.to(device)
 student.eval()
 
-
 def infer_student(image, question):
     pixel_values = vision_processor(image, return_tensors="pt").pixel_values.to(device)
-    q_enc = student.text_tokenizer(question, return_tensors="pt", truncation=True, padding=True).to(device)
+    enc = student.text_tokenizer(question, return_tensors="pt", truncation=True).to(device)
     with torch.no_grad():
-        output_ids = student.generate(
+        out = student.generate(
             pixel_values=pixel_values,
-            input_ids=q_enc.input_ids,
-            attention_mask=q_enc.attention_mask,
-            max_length=64,
+            input_ids=enc.input_ids,
+            attention_mask=enc.attention_mask,
+            max_length=80,
             num_beams=4
         )
-    return student.decoder_tokenizer.batch_decode(output_ids, skip_special_tokens=True)[0].strip()
-
+    return student.decoder_tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
 
 # ===============================
-# 3️⃣ Inference on Test Set
+#  Inference
 # ===============================
-df = pd.read_csv(DATA_PATH)
-df = df.head(100)
+df = pd.read_csv(DATA_PATH).head(100)
 records = []
 
-for _, row in tqdm(df.iterrows(), total=len(df), desc="Evaluating"):
+for _, row in tqdm(df.iterrows(), total=len(df)):
     q = str(row["question"])
     gt = str(row["answer"]) if "answer" in row else ""
-    img_id = str(row["img_id"])
-    img_path = os.path.join(IMAGE_DIR, f"{img_id}.jpg")
+    img_path = os.path.join(IMAGE_DIR, f"{row['img_id']}.jpg")
 
-    try:
-        image = Image.open(img_path).convert("RGB")
-    except:
+    if not os.path.exists(img_path):
         continue
+
+    image = Image.open(img_path).convert("RGB")
 
     t_out = infer_teacher(image, q)
     s_out = infer_student(image, q)
 
+    s_ans, s_rea = split_answer_reasoning(s_out)
+    t_ans = extract_answer(t_out)
+
     records.append({
-        "img_id": img_id,
+        "img_id": row["img_id"],
         "question": q,
         "ground_truth": gt,
-        "teacher_output": t_out,
-        "student_output": s_out
+        "teacher_answer": t_ans,
+        "student_answer": s_ans,
+        "student_reasoning": s_rea,
+        "teacher_output_raw": t_out,
+        "student_output_raw": s_out
     })
 
 df_out = pd.DataFrame(records)
 df_out.to_csv(SAVE_PATH, index=False)
-print(f"[INFO] ✅ Saved predictions → {SAVE_PATH}")
+print(f"[INFO] ✅ Predictions saved → {SAVE_PATH}")
 
 # ===============================
-# 4️⃣ Clean answers & Compute Metrics
+#  Compute Metrics
 # ===============================
-print("[INFO] Cleaning text and computing metrics...")
-
-df_out["teacher_answer"] = df_out["teacher_output"].apply(extract_answer)
-df_out["student_answer"] = df_out["student_output"].apply(extract_answer)
-df_out["ground_truth_norm"] = df_out["ground_truth"].apply(normalize_text)
-df_out["teacher_norm"] = df_out["teacher_answer"].apply(normalize_text)
-df_out["student_norm"] = df_out["student_answer"].apply(normalize_text)
-
-# Bỏ các mẫu trống để tránh lỗi chia 0
 df_valid = df_out[
-    (df_out["ground_truth_norm"].str.len() > 0)
-    & (df_out["teacher_norm"].str.len() > 0)
-    & (df_out["student_norm"].str.len() > 0)
+    (df_out["ground_truth"].str.len() > 0)
+    & (df_out["teacher_answer"].str.len() > 0)
+    & (df_out["student_answer"].str.len() > 0)
 ]
 
-if len(df_valid) == 0:
-    raise ValueError("Không có mẫu hợp lệ để tính BLEU / ROUGE / BERTScore.")
+gt = df_valid["ground_truth"].apply(normalize_text).tolist()
+teacher_preds = df_valid["teacher_answer"].apply(normalize_text).tolist()
+student_preds = df_valid["student_answer"].apply(normalize_text).tolist()
 
-ground_truths = df_valid["ground_truth_norm"].tolist()
-teacher_preds = df_valid["teacher_norm"].tolist()
-student_preds = df_valid["student_norm"].tolist()
+teacher_bleu = bleu.compute(predictions=teacher_preds, references=gt, smooth=True)["bleu"]
+student_bleu = bleu.compute(predictions=student_preds, references=gt, smooth=True)["bleu"]
 
-# Hàm tính metric an toàn
-def safe_compute(metric, predictions, references, **kwargs):
-    try:
-        return metric.compute(predictions=predictions, references=references, **kwargs)
-    except ZeroDivisionError:
-        return {list(metric.features.keys())[0]: 0.0}
+teacher_rouge = rouge.compute(predictions=teacher_preds, references=gt)["rougeL"]
+student_rouge = rouge.compute(predictions=student_preds, references=gt)["rougeL"]
 
-teacher_bleu = safe_compute(bleu, teacher_preds, ground_truths, smooth=True)["bleu"]
-teacher_rouge = safe_compute(rouge, teacher_preds, ground_truths)["rougeL"]
-teacher_bert = sum(
-    bertscore.compute(predictions=teacher_preds, references=ground_truths, lang="vi")["f1"]
-) / len(ground_truths)
+teacher_bert = sum(bertscore.compute(predictions=teacher_preds, references=gt, lang="vi")["f1"]) / len(gt)
+student_bert = sum(bertscore.compute(predictions=student_preds, references=gt, lang="vi")["f1"]) / len(gt)
 
-student_bleu = safe_compute(bleu, student_preds, ground_truths, smooth=True)["bleu"]
-student_rouge = safe_compute(rouge, student_preds, ground_truths)["rougeL"]
-student_bert = sum(
-    bertscore.compute(predictions=student_preds, references=ground_truths, lang="vi")["f1"]
-) / len(ground_truths)
+print("\n=========== FINAL EVAL ===========")
+print(f"BLEU:     Teacher={teacher_bleu:.4f} | Student={student_bleu:.4f}")
+print(f"ROUGE-L:  Teacher={teacher_rouge:.4f} | Student={student_rouge:.4f}")
+print(f"BERT-F1:  Teacher={teacher_bert:.4f} | Student={student_bert:.4f}")
+print("=================================\n")
 
-# ===============================
-# 5️⃣ Print Summary
-# ===============================
-print("\n=========== FINAL EVALUATION REPORT (CLEANED) ===========")
-print(f"{'Metric':<15} | {'Teacher':>10} | {'Student':>10}")
-print("-" * 42)
-print(f"{'BLEU':<15} | {teacher_bleu:>10.4f} | {student_bleu:>10.4f}")
-print(f"{'ROUGE-L':<15} | {teacher_rouge:>10.4f} | {student_rouge:>10.4f}")
-print(f"{'BERTScore (F1)':<15} | {teacher_bert:>10.4f} | {student_bert:>10.4f}")
-print("==========================================================\n")
-
-summary = {
-    "Teacher": {"BLEU": teacher_bleu, "ROUGE-L": teacher_rouge, "BERTScore": teacher_bert},
-    "Student": {"BLEU": student_bleu, "ROUGE-L": student_rouge, "BERTScore": student_bert}
-}
-json.dump(summary, open("/kaggle/working/metrics_summary.json", "w"), indent=2, ensure_ascii=False)
-print("[INFO] 📊 Saved metrics_summary.json for report.")
+json.dump(
+    {
+        "Teacher": {"BLEU": teacher_bleu, "ROUGE-L": teacher_rouge, "BERTScore": teacher_bert},
+        "Student": {"BLEU": student_bleu, "ROUGE-L": student_rouge, "BERTScore": student_bert},
+    },
+    open("/kaggle/working/metrics_summary.json", "w"),
+    indent=2,
+    ensure_ascii=False
+)
+print("[INFO] 📊 metrics_summary.json saved.")
