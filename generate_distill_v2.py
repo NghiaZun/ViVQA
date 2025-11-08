@@ -188,7 +188,7 @@ BẠN PHẢI TRẢ LỜI THEO ĐÚNG FORMAT SAU (NGẮN GỌN):
 Reasoning types: DESCRIPTIVE, CAUSAL, SPATIAL, COUNTING, OBJECT, COMMONSENSE, INTENT
 
 Lưu ý:
-- Answer phải NGẮN GỌN (1-5 từ nếu có thể)
+- Answer phải NGẮN GỌN (2-5 từ)
 - Reasoning chỉ 1-2 câu giải thích
 - BẮT BUỘC dùng đúng tag XML và reasoning type token [{expected_type}]
 """
