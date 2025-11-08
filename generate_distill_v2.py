@@ -99,8 +99,7 @@ Trả lời đúng 1 từ trong danh sách."""
             output = model.generate(
                 **inputs,
                 max_new_tokens=20,
-                do_sample=False,
-                temperature=0.3
+                do_sample=False
             )
 
         generated_ids = output[:, inputs.input_ids.shape[1]:]
