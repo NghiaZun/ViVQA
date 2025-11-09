@@ -1,6 +1,6 @@
 """
-teacher_generate.py – Generate teacher answers (OPTIMIZED for 2xT4)
-Author: Nghia-Duong (optimized)
+teacher_generate.py – STABLE version với tối ưu đơn giản
+Author: Nghia-Duong (stable + faster)
 """
 
 import os
@@ -11,8 +11,6 @@ from PIL import Image
 import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoModelForVision2Seq
-from torch.utils.data import Dataset, DataLoader
-from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
 
 # ===========================
 # CONFIG
@@ -21,9 +19,6 @@ CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
-
-BATCH_SIZE = 4  # Tăng lên 4-8 tùy VRAM
-NUM_WORKERS = 2  # Để load ảnh song song
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -36,55 +31,20 @@ REASONING_WEIGHTS = {
 }
 
 # ===========================
-# DATASET CLASS
+# LOAD MODEL - ĐƠN GIẢN HÓA
 # ===========================
-class VQADataset(Dataset):
-    def __init__(self, df, image_dir):
-        self.df = df.reset_index(drop=True)
-        self.image_dir = image_dir
-        
-    def __len__(self):
-        return len(self.df)
-    
-    def __getitem__(self, idx):
-        row = self.df.iloc[idx]
-        image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
-        image_path = os.path.join(self.image_dir, f"{image_id}.jpg")
-        
-        try:
-            image = Image.open(image_path).convert("RGB")
-        except:
-            image = None
-            
-        return {
-            "image": image,
-            "image_id": image_id,
-            "image_path": image_path,
-            "question": str(row["question"]).strip(),
-            "reasoning_type": row["reasoning_type"]
-        }
-
-# ===========================
-# LOAD MODEL
-# ===========================
-device = "cuda" if torch.cuda.is_available() else "cpu"
+device = "cuda:0"  # Chỉ dùng GPU đầu tiên cho ổn định
 print(f"[INFO] Using device: {device}")
-print(f"[INFO] Number of GPUs: {torch.cuda.device_count()}")
 
 processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
 model = AutoModelForVision2Seq.from_pretrained(
     MODEL_NAME,
     torch_dtype=torch.float16,
-    device_map="balanced",  # Tự động phân bổ qua 2 GPU
+    device_map="auto",  # Để tự động chọn, nhưng sẽ ưu tiên GPU 0
     trust_remote_code=True,
     low_cpu_mem_usage=True
 )
 model.eval()
-
-# Enable compilation cho PyTorch 2.0+
-if hasattr(torch, 'compile'):
-    print("[INFO] Compiling model with torch.compile...")
-    model = torch.compile(model, mode="reduce-overhead")
 
 # ===========================
 # PARSE OUTPUT
@@ -104,136 +64,132 @@ def parse_structured_output(text: str):
     return answer, reasoning, reasoning_type
 
 # ===========================
-# BATCH GENERATION
+# TEACHER GENERATION - CẢI THIỆN
 # ===========================
-def generate_batch(batch):
-    # Filter out failed images
-    valid_indices = [i for i, img in enumerate(batch["image"]) if img is not None]
-    if not valid_indices:
-        return []
-    
-    valid_images = [batch["image"][i] for i in valid_indices]
-    valid_data = [{k: batch[k][i] for k in batch.keys()} for i in valid_indices]
-    
-    # Prepare messages for all samples
-    messages_list = []
-    for data in valid_data:
-        user_prompt = build_fewshot_prompt(data["question"])
-        expected_type = data["reasoning_type"]
-        
-        enhanced_system_prompt = f"""{SYSTEM_PROMPT}
+@torch.no_grad()  # Decorator để tự động no_grad
+def call_teacher_qwen(image_path: str, question: str, expected_type: str):
+    try:
+        image = Image.open(image_path).convert("RGB")
+    except Exception as e:
+        return None  # Trả về None thay vì dict rỗng
+
+    from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
+    user_prompt = build_fewshot_prompt(question)
+
+    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 
 BẠN PHẢI TRẢ LỜI THEO FORMAT:
 
 <answer>Câu trả lời ngắn</answer>
 <reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
 """
-        
-        messages = [
-            {"role": "system", "content": enhanced_system_prompt},
-            {"role": "user", "content": [
-                {"type": "image", "image": valid_images[0]},  # Placeholder
-                {"type": "text", "text": user_prompt}
-            ]}
-        ]
-        messages_list.append(messages)
-    
-    # Process all at once
+
+    messages = [
+        {"role": "system", "content": enhanced_system_prompt},
+        {"role": "user", "content": [
+            {"type": "image", "image": image},
+            {"type": "text", "text": user_prompt}
+        ]}
+    ]
+
     try:
-        text_prompts = [processor.apply_chat_template(msgs, tokenize=False, add_generation_prompt=True) 
-                       for msgs in messages_list]
+        text_prompt = processor.apply_chat_template(
+            messages, 
+            tokenize=False, 
+            add_generation_prompt=True
+        )
         
         inputs = processor(
-            text=text_prompts,
-            images=valid_images,
+            text=[text_prompt],
+            images=[image],
             padding=True,
             return_tensors="pt"
         ).to(device)
 
-        with torch.no_grad(), torch.amp.autocast('cuda'):  # Mixed precision
+        # Mixed precision + cache
+        with torch.amp.autocast('cuda'):
             output = model.generate(
                 **inputs,
-                max_new_tokens=200,
+                max_new_tokens=150,
                 do_sample=True,
                 temperature=0.6,
                 top_p=0.85,
                 top_k=40,
-                num_beams=1,  # Greedy cho nhanh hơn
-                use_cache=True  # Cache KV
+                use_cache=True,
+                pad_token_id=processor.tokenizer.pad_token_id
             )
 
-        generated_texts = processor.batch_decode(
+        gen = processor.batch_decode(
             output[:, inputs.input_ids.shape[1]:],
             skip_special_tokens=True
-        )
-        
-        results = []
-        for i, gen_text in enumerate(generated_texts):
-            data = valid_data[i]
-            answer, reasoning, reasoning_type = parse_structured_output(gen_text)
-            
-            if not reasoning_type:
-                reasoning_type = data["reasoning_type"]
-            
-            if answer:  # Only save if we got an answer
-                results.append({
-                    "img_id": data["image_id"],
-                    "image_path": data["image_path"],
-                    "question": data["question"],
-                    "reasoning_type": reasoning_type,
-                    "teacher_answer": answer,
-                    "teacher_reasoning": reasoning,
-                    "teacher_raw": gen_text.strip(),
-                    "reasoning_weight": REASONING_WEIGHTS.get(reasoning_type, 1.0)
-                })
-        
-        return results
-        
+        )[0].strip()
+
+        answer, reasoning, reasoning_type = parse_structured_output(gen)
+        if not reasoning_type:
+            reasoning_type = expected_type
+
+        return {
+            "answer": answer,
+            "reasoning": reasoning,
+            "reasoning_type": reasoning_type,
+            "raw": gen,
+            "reasoning_weight": REASONING_WEIGHTS.get(reasoning_type, 1.0)
+        }
+
     except Exception as e:
-        print(f"[WARN] Batch generation failed: {e}")
-        return []
+        print(f"[ERROR] Generation failed for {image_path}: {e}")
+        return None
 
 # ===========================
-# COLLATE FUNCTION
-# ===========================
-def collate_fn(batch):
-    return {
-        "image": [item["image"] for item in batch],
-        "image_id": [item["image_id"] for item in batch],
-        "image_path": [item["image_path"] for item in batch],
-        "question": [item["question"] for item in batch],
-        "reasoning_type": [item["reasoning_type"] for item in batch]
-    }
-
-# ===========================
-# MAIN LOOP
+# MAIN LOOP - CẢI THIỆN
 # ===========================
 df = pd.read_csv(CSV_PATH)
-dataset = VQADataset(df, IMAGE_DIR)
-dataloader = DataLoader(
-    dataset,
-    batch_size=BATCH_SIZE,
-    shuffle=False,
-    num_workers=NUM_WORKERS,
-    collate_fn=collate_fn,
-    pin_memory=True  # Faster GPU transfer
-)
-
 results = []
 
-for batch in tqdm(dataloader, desc="Teacher Generating"):
-    batch_results = generate_batch(batch)
-    results.extend(batch_results)
+# Periodic save để tránh mất dữ liệu
+SAVE_INTERVAL = 200
+
+print(f"[INFO] Total samples to process: {len(df)}")
+
+for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
+    image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
+    image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     
-    # Save periodically to avoid losing progress
-    if len(results) % 100 == 0:
+    if not os.path.exists(image_path):
+        continue
+
+    q = str(row["question"]).strip()
+    exp_type = row["reasoning_type"]
+
+    res = call_teacher_qwen(image_path, q, exp_type)
+
+    if res and res["answer"]:  # Kiểm tra res không None
+        results.append({
+            "img_id": image_id,
+            "image_path": image_path,
+            "question": q,
+            "reasoning_type": res["reasoning_type"],
+            "teacher_answer": res["answer"],
+            "teacher_reasoning": res["reasoning"],
+            "teacher_raw": res["raw"],
+            "reasoning_weight": res["reasoning_weight"]
+        })
+    
+    # Save định kỳ
+    if len(results) % SAVE_INTERVAL == 0 and len(results) > 0:
         with open(OUT_JSONL, "w", encoding="utf-8") as f:
             for r in results:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"\n[INFO] 💾 Checkpoint: Saved {len(results)} samples")
+    
+    # Clear cache mỗi 100 samples
+    if idx % 100 == 0:
+        torch.cuda.empty_cache()
 
 # Final save
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-print(f"[INFO] ✅ Saved {len(results)} teacher samples → {OUT_JSONL}")
+print(f"\n[INFO] ✅ Completed! Saved {len(results)}/{len(df)} teacher samples → {OUT_JSONL}")
+print(f"[INFO] Success rate: {len(results)/len(df)*100:.1f}%")
