@@ -1,71 +1,64 @@
 """
 Prompt utilities for teacher reasoning (Day 1)
-Author: Nghĩa Duong
+Author: Nghĩa Duong (refined)
 """
 
 # ===========================
 # System Prompt
 # ===========================
 SYSTEM_PROMPT = (
-    "Bạn là mô hình Visual Question Answering thông minh, "
-    "trả lời bằng tiếng Việt ngắn gọn và có phần giải thích (Reasoning). "
-    "Luôn trả lời theo định dạng:\n\n"
-    "Answer: <câu trả lời ngắn>\n"
-    "Reasoning: <giải thích ngắn, thuộc một trong các loại: "
-    "Visual Recognition, Spatial, Counting, Commonsense, Causal, hoặc Comparative>.\n"
+    "Bạn là mô hình Visual Question Answering tiếng Việt. "
+    "Trả lời NGẮN, RÕ và luôn theo đúng chuẩn định dạng XML sau:\n\n"
+    "<answer>Câu trả lời ngắn</answer>\n"
+    "<reasoning>[LOẠI_REASONING] 1-2 câu giải thích</reasoning>\n\n"
+    "Trong đó LOẠI_REASONING ∈ {DESCRIPTIVE, CAUSAL, SPATIAL, COUNTING, "
+    "OBJECT, COMMONSENSE, INTENT}.\n"
 )
 
 # ===========================
-# Few-shot Examples
+# Few-shot Examples (đã sửa về XML format)
 # ===========================
 FEW_SHOTS = [
-    # Visual Recognition
     {
         "question": "Màu của chiếc bình là gì?",
         "answer": (
-            "Answer: màu xanh lá\n"
-            "Reasoning (Visual Recognition): Chiếc bình trong ảnh có sắc xanh lá, "
-            "nên màu của nó là xanh lá."
+            "<answer>xanh lá</answer>\n"
+            "<reasoning>[DESCRIPTIVE] Chiếc bình trong ảnh có màu xanh lá đặc trưng.</reasoning>"
         )
     },
-    # Spatial
     {
-        "question": "Cô gái ngồi ở đâu?",
+        "question": "Cô gái đang ngồi ở đâu?",
         "answer": (
-            "Answer: trên giường\n"
-            "Reasoning (Spatial): Cô gái ngồi trên bề mặt có chăn gối, đặc trưng của giường."
+            "<answer>trên giường</answer>\n"
+            "<reasoning>[SPATIAL] Cô gái ngồi trên bề mặt có chăn gối, đặc trưng của giường.</reasoning>"
         )
     },
-    # Counting
     {
-        "question": "Có bao nhiêu con chim đậu trên cành cây bên cạnh nhau?",
+        "question": "Có bao nhiêu con chim đang đậu trên cành cây?",
         "answer": (
-            "Answer: hai\n"
-            "Reasoning (Counting): Có hai con chim đậu cạnh nhau, không có con nào khác."
+            "<answer>hai</answer>\n"
+            "<reasoning>[COUNTING] Có hai con chim đứng cạnh nhau và không có con nào khác.</reasoning>"
         )
     },
-    # Commonsense
     {
         "question": "Tại sao người đàn ông đội mũ bảo hiểm?",
         "answer": (
-            "Answer: để bảo vệ đầu khi lái xe máy\n"
-            "Reasoning (Commonsense): Người lái xe đội mũ bảo hiểm để tránh chấn thương đầu."
+            "<answer>để bảo vệ đầu</answer>\n"
+            "<reasoning>[COMMONSENSE] Khi lái xe máy, người ta đội mũ bảo hiểm để tránh chấn thương đầu.</reasoning>"
         )
     },
-    # Causal
     {
-        "question": "Tại sao chiếc ô bị ướt?",
+        "question": "Tại sao mặt đất lại ướt?",
         "answer": (
-            "Answer: vì trời đang mưa\n"
-            "Reasoning (Causal): Có giọt nước rơi và nền đường ướt cho thấy trời mưa."
+            "<answer>vì trời mưa</answer>\n"
+            "<reasoning>[CAUSAL] Có vệt nước và giọt mưa trong ảnh cho thấy trời đang mưa.</reasoning>"
         )
     },
-    # Comparative
     {
-        "question": "Chiếc xe nào lớn hơn giữa hai chiếc?",
+        "question": "Trong hai chiếc xe, chiếc nào lớn hơn?",
         "answer": (
-            "Answer: chiếc xe tải lớn hơn\n"
-            "Reasoning (Comparative): Xe tải có thân và bánh lớn hơn xe con."
+            "<answer>chiếc xe tải</answer>\n"
+            "<reasoning>[OBJECT] Xe tải có kích thước lớn hơn rõ rệt so với xe còn lại.</reasoning>"
         )
     },
 ]
@@ -74,14 +67,23 @@ FEW_SHOTS = [
 # Build few-shot prompt
 # ===========================
 def build_fewshot_prompt(question: str) -> str:
-    """Tạo prompt có ví dụ few-shot"""
-    examples = [f"Q: {ex['question']}\n{ex['answer']}" for ex in FEW_SHOTS]
+    """Tạo few-shot prompt đúng định dạng XML của mô hình."""
+    examples = []
+    for ex in FEW_SHOTS:
+        examples.append(
+            f"Q: {ex['question']}\n{ex['answer']}"
+        )
+
     fewshot_text = "\n\n".join(examples)
+
     prompt = (
-        "Dưới đây là các ví dụ về cách mô hình trả lời câu hỏi thị giác bằng tiếng Việt. "
-        "Mỗi câu trả lời có hai phần: Answer và Reasoning.\n\n"
+        "Dưới đây là các ví dụ minh họa cách mô hình trả lời câu hỏi VQA bằng tiếng Việt.\n"
+        "Luôn dùng đúng format XML:\n"
+        "<answer>...</answer>\n"
+        "<reasoning>[TYPE] ...</reasoning>\n\n"
         f"{fewshot_text}\n\n"
-        f"Bây giờ, hãy trả lời câu hỏi sau theo cùng định dạng:\n\n"
+        f"Bây giờ, hãy trả lời câu hỏi sau theo đúng định dạng:\n\n"
         f"Q: {question}"
     )
+
     return prompt
