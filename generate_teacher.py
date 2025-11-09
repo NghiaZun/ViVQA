@@ -16,7 +16,7 @@ from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
 # ===========================
 # CONFIG
 # ===========================
-CSV_PATH = "/kaggle/working/train_balanced.csv"
+CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
