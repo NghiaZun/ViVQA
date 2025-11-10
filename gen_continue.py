@@ -1,6 +1,6 @@
 """
-teacher_generate_resume.py – Stable RESUME version
-Author: Nghia-Duong (resume + safe checkpoint)
+teacher_generate_resume_safe.py – Resume-safe Teacher Generation
+Author: Nghia-Duong (refined by ChatGPT)
 """
 
 import os
@@ -19,8 +19,8 @@ CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 
-OLD_JSONL = "/kaggle/input/teacher-checkpoint-old/teacher_outputs.jsonl"   # <--- CHECKPOINT CŨ
-OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"                       # <--- OUTPUT MỚI
+OLD_JSONL = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"  # resume từ checkpoint cũ
+OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"                       # output mới
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -33,13 +33,12 @@ REASONING_WEIGHTS = {
 }
 
 SAVE_INTERVAL = 200  # checkpoint định kỳ
+DEVICE = "cuda:0"
 
 # ===========================
 # LOAD MODEL
 # ===========================
-device = "cuda:0"
-print(f"[INFO] Using device: {device}")
-
+print(f"[INFO] Using device: {DEVICE}")
 processor = AutoProcessor.from_pretrained(MODEL_NAME, trust_remote_code=True)
 model = AutoModelForVision2Seq.from_pretrained(
     MODEL_NAME,
@@ -50,13 +49,11 @@ model = AutoModelForVision2Seq.from_pretrained(
 )
 model.eval()
 
-
 # ===========================
 # PARSE OUTPUT
 # ===========================
 def parse_structured_output(text: str):
     answer, reasoning, reasoning_type = "", "", ""
-
     m1 = re.search(r"<answer>(.*?)</answer>", text, re.S)
     if m1:
         answer = m1.group(1).strip()
@@ -67,7 +64,6 @@ def parse_structured_output(text: str):
         reasoning = m2.group(2).strip()
 
     return answer, reasoning, reasoning_type
-
 
 # ===========================
 # LOAD OLD CHECKPOINT
@@ -88,7 +84,6 @@ if os.path.exists(OLD_JSONL):
                 pass
 
 print(f"[INFO] Resume loaded: {len(done)} items already completed")
-
 
 # ===========================
 # TEACHER CALL
@@ -127,7 +122,7 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
             images=[image],
             padding=True,
             return_tensors="pt"
-        ).to(device)
+        ).to(DEVICE)
 
         with torch.amp.autocast("cuda"):
             output = model.generate(
@@ -162,7 +157,6 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
         print(f"[ERROR] Generation failed for {image_path}: {e}")
         return None
 
-
 # ===========================
 # MAIN LOOP (RESUME)
 # ===========================
@@ -174,7 +168,6 @@ processed = len(results)
 
 for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
-
     if image_id in done:
         continue
 
@@ -186,7 +179,6 @@ for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     expected_type = row["reasoning_type"]
 
     res = call_teacher_qwen(img_path, q, expected_type)
-
     if res and res["answer"]:
         results.append({
             "img_id": image_id,
@@ -201,17 +193,18 @@ for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
         done.add(image_id)
         processed += 1
 
-    # checkpoint (APPEND, không overwrite)
+    # checkpoint append
     if processed % SAVE_INTERVAL == 0:
-        with open(OUT_JSONL, "w", encoding="utf-8") as f:
-            for r in results:
+        with open(OUT_JSONL, "a", encoding="utf-8") as f:
+            for r in results[-SAVE_INTERVAL:]:  # chỉ ghi mẫu mới
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print(f"[INFO] ✅ Saved checkpoint: {processed} samples")
 
+    # dọn cache GPU
     if idx % 100 == 0:
         torch.cuda.empty_cache()
 
-# Final save
+# final save (overwrite)
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
