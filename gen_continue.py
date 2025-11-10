@@ -1,14 +1,17 @@
 """
-teacher_generate_resume.py – Resume từ checkpoint
+teacher_generate_resume.py – STABLE + RESUME + NO-DUP + APPEND
+Author: Nghia-Duong
 """
 
 import os
 import json
+import re
 import pandas as pd
 from PIL import Image
 import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoModelForVision2Seq
+
 
 # ===========================
 # CONFIG
@@ -16,10 +19,7 @@ from transformers import AutoProcessor, AutoModelForVision2Seq
 CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-
-# CHECKPOINT PATH (update với dataset của bạn)
-CHECKPOINT_JSONL = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
-OUT_JSONL = "/kaggle/working/teacher_outputs_continued.jsonl"
+OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -31,29 +31,8 @@ REASONING_WEIGHTS = {
     "COMMONSENSE": 1.0
 }
 
-# ===========================
-# LOAD CHECKPOINT
-# ===========================
-def load_checkpoint(checkpoint_path):
-    """Load processed image IDs from checkpoint"""
-    processed_ids = set()
-    existing_results = []
-    
-    if os.path.exists(checkpoint_path):
-        print(f"[INFO] Loading checkpoint from {checkpoint_path}...")
-        with open(checkpoint_path, "r", encoding="utf-8") as f:
-            for line in f:
-                try:
-                    data = json.loads(line.strip())
-                    processed_ids.add(data["img_id"])
-                    existing_results.append(data)
-                except:
-                    continue
-        print(f"[INFO] ✅ Loaded {len(processed_ids)} existing samples")
-    else:
-        print("[INFO] No checkpoint found. Starting from scratch.")
-    
-    return processed_ids, existing_results
+SAVE_EVERY = 50
+
 
 # ===========================
 # LOAD MODEL
@@ -71,11 +50,11 @@ model = AutoModelForVision2Seq.from_pretrained(
 )
 model.eval()
 
+
 # ===========================
-# PARSE OUTPUT (same as before)
+# PARSE OUTPUT
 # ===========================
 def parse_structured_output(text: str):
-    import re
     answer, reasoning, reasoning_type = "", "", ""
 
     m1 = re.search(r"<answer>(.*?)</answer>", text, re.S)
@@ -89,14 +68,43 @@ def parse_structured_output(text: str):
 
     return answer, reasoning, reasoning_type
 
+
 # ===========================
-# TEACHER GENERATION (same as before)
+# SAVE APPEND
+# ===========================
+def save_append(records, path):
+    if len(records) == 0:
+        return
+    with open(path, "a", encoding="utf-8") as f:
+        for r in records:
+            f.write(json.dumps(r, ensure_ascii=False) + "\n")
+
+
+# ===========================
+# LOAD DONE (RESUME)
+# ===========================
+done = set()
+
+if os.path.exists(OUT_JSONL):
+    with open(OUT_JSONL, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                obj = json.loads(line)
+                done.add(obj["img_id"])
+            except:
+                pass
+
+print(f"[INFO] Resume mode: loaded {len(done)} completed samples")
+
+
+# ===========================
+# TEACHER CALL
 # ===========================
 @torch.no_grad()
 def call_teacher_qwen(image_path: str, question: str, expected_type: str):
     try:
         image = Image.open(image_path).convert("RGB")
-    except Exception as e:
+    except Exception:
         return None
 
     from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
@@ -104,7 +112,7 @@ def call_teacher_qwen(image_path: str, question: str, expected_type: str):
 
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 
-BẠN PHẢI TRẢ LỜI THEO FORMAT:
+TRẢ LỜI THEO ĐÚNG FORMAT:
 
 <answer>Câu trả lời ngắn</answer>
 <reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
@@ -120,11 +128,11 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
 
     try:
         text_prompt = processor.apply_chat_template(
-            messages, 
-            tokenize=False, 
+            messages,
+            tokenize=False,
             add_generation_prompt=True
         )
-        
+
         inputs = processor(
             text=[text_prompt],
             images=[image],
@@ -162,96 +170,56 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
         }
 
     except Exception as e:
-        print(f"[ERROR] Generation failed: {e}")
+        print(f"[ERROR] {image_path}: {e}")
         return None
 
+
 # ===========================
-# MAIN LOOP - RESUME VERSION
+# MAIN LOOP (RESUME SAFE)
 # ===========================
 df = pd.read_csv(CSV_PATH)
-print(f"[INFO] Total samples in CSV: {len(df)}")
+print(f"[INFO] Total rows: {len(df)}")
 
-# Load checkpoint
-processed_ids, existing_results = load_checkpoint(CHECKPOINT_JSONL)
+buffer = []
 
-# Filter remaining samples
-df_remaining = df[~df["img_id"].isin(processed_ids)].reset_index(drop=True)
-print(f"[INFO] 🎯 Remaining to process: {len(df_remaining)} samples")
-print(f"[INFO] Progress: {len(processed_ids)}/{len(df)} ({len(processed_ids)/len(df)*100:.1f}%)")
-
-if len(df_remaining) == 0:
-    print("[INFO] ✅ All samples already processed!")
-    exit(0)
-
-# Generate remaining
-new_results = []
-SAVE_INTERVAL = 50  # Save mỗi 50 samples
-
-for idx, row in tqdm(df_remaining.iterrows(), total=len(df_remaining), desc="Resuming Generation"):
+for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
+
+    # SKIP if already done
+    if image_id in done:
+        continue
+
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
-    
     if not os.path.exists(image_path):
         continue
 
-    q = str(row["question"]).strip()
-    exp_type = row["reasoning_type"]
+    question = str(row["question"]).strip()
+    expected_type = row["reasoning_type"]
 
-    res = call_teacher_qwen(image_path, q, exp_type)
+    r = call_teacher_qwen(image_path, question, expected_type)
+    if r is None or not r["answer"]:
+        continue
 
-    if res and res["answer"]:
-        new_results.append({
-            "img_id": image_id,
-            "image_path": image_path,
-            "question": q,
-            "reasoning_type": res["reasoning_type"],
-            "teacher_answer": res["answer"],
-            "teacher_reasoning": res["reasoning"],
-            "teacher_raw": res["raw"],
-            "reasoning_weight": res["reasoning_weight"]
-        })
-    
-    # Periodic save (chỉ save phần mới)
-    if len(new_results) % SAVE_INTERVAL == 0 and len(new_results) > 0:
-        with open(OUT_JSONL, "w", encoding="utf-8") as f:
-            for r in new_results:
-                f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        print(f"\n[INFO] 💾 Checkpoint: {len(new_results)} new samples saved")
-    
-    # Clear cache
-    if idx % 100 == 0:
+    buffer.append({
+        "img_id": image_id,
+        "image_path": image_path,
+        "question": question,
+        "reasoning_type": r["reasoning_type"],
+        "teacher_answer": r["answer"],
+        "teacher_reasoning": r["reasoning"],
+        "teacher_raw": r["raw"],
+        "reasoning_weight": r["reasoning_weight"]
+    })
+
+    # Append every N samples
+    if len(buffer) >= SAVE_EVERY:
+        save_append(buffer, OUT_JSONL)
+        for item in buffer:
+            done.add(item["img_id"])
+        buffer = []
         torch.cuda.empty_cache()
 
-# Final save (chỉ phần mới)
-with open(OUT_JSONL, "w", encoding="utf-8") as f:
-    for r in new_results:
-        f.write(json.dumps(r, ensure_ascii=False) + "\n")
+# Final flush
+save_append(buffer, OUT_JSONL)
 
-print(f"\n[INFO] ✅ Generated {len(new_results)} new samples → {OUT_JSONL}")
-
-# ===========================
-# MERGE WITH CHECKPOINT
-# ===========================
-FINAL_JSONL = "/kaggle/working/teacher_outputs_full.jsonl"
-
-print(f"[INFO] Merging checkpoint + new results...")
-with open(FINAL_JSONL, "w", encoding="utf-8") as f_out:
-    # Write existing results
-    for r in existing_results:
-        f_out.write(json.dumps(r, ensure_ascii=False) + "\n")
-    
-    # Write new results
-    for r in new_results:
-        f_out.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-total_count = len(existing_results) + len(new_results)
-print(f"[INFO] ✅ MERGED! Total: {total_count}/{len(df)} samples")
-print(f"[INFO] Final file: {FINAL_JSONL}")
-print(f"[INFO] Completion rate: {total_count/len(df)*100:.1f}%")
-
-# Verify
-print("\n[INFO] Verification:")
-print(f"  - Checkpoint: {len(existing_results)}")
-print(f"  - New: {len(new_results)}")
-print(f"  - Total: {total_count}")
-print(f"  - Missing: {len(df) - total_count}")
+print(f"[INFO] ✅ Completed. Total saved: {len(done)} lines → {OUT_JSONL}")
