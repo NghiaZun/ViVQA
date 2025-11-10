@@ -1,5 +1,5 @@
 """
-teacher_generate_resume.py – STABLE + RESUME + NO-DUP + APPEND
+teacher_generate_resume_from_uploaded.py – Resume from uploaded old JSONL
 Author: Nghia-Duong
 """
 
@@ -13,13 +13,21 @@ from tqdm import tqdm
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
 
-# ===========================
+# ============================================================
 # CONFIG
-# ===========================
+# ============================================================
 CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
+
+# === bạn upload file JSONL cũ lên Kaggle rồi ===
+OLD_JSONL = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
+
+# output mới sẽ được tiếp tục ghi ra đây
 OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
+
+MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
+
+SAVE_EVERY = 50  # buffer flush
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -31,12 +39,10 @@ REASONING_WEIGHTS = {
     "COMMONSENSE": 1.0
 }
 
-SAVE_EVERY = 50
 
-
-# ===========================
+# ============================================================
 # LOAD MODEL
-# ===========================
+# ============================================================
 device = "cuda:0"
 print(f"[INFO] Using device: {device}")
 
@@ -51,9 +57,9 @@ model = AutoModelForVision2Seq.from_pretrained(
 model.eval()
 
 
-# ===========================
-# PARSE OUTPUT
-# ===========================
+# ============================================================
+# PARSE TEACHER OUTPUT
+# ============================================================
 def parse_structured_output(text: str):
     answer, reasoning, reasoning_type = "", "", ""
 
@@ -69,37 +75,35 @@ def parse_structured_output(text: str):
     return answer, reasoning, reasoning_type
 
 
-# ===========================
-# SAVE APPEND
-# ===========================
+# ============================================================
+# LOAD OLD COMPLETED IDS
+# ============================================================
+done = set()
+
+if os.path.exists(OLD_JSONL):
+    with open(OLD_JSONL, "r", encoding="utf-8") as f:
+        for line in f:
+            try:
+                obj = json.loads(line)
+                done.add(str(obj["img_id"]))
+            except:
+                pass
+
+print(f"[INFO] Resume loaded {len(done)} completed items from old JSONL")
+
+
+# ============================================================
+# SAVE (APPEND)
+# ============================================================
 def save_append(records, path):
-    if len(records) == 0:
-        return
     with open(path, "a", encoding="utf-8") as f:
         for r in records:
             f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
 
-# ===========================
-# LOAD DONE (RESUME)
-# ===========================
-done = set()
-
-if os.path.exists(OUT_JSONL):
-    with open(OUT_JSONL, "r", encoding="utf-8") as f:
-        for line in f:
-            try:
-                obj = json.loads(line)
-                done.add(obj["img_id"])
-            except:
-                pass
-
-print(f"[INFO] Resume mode: loaded {len(done)} completed samples")
-
-
-# ===========================
+# ============================================================
 # TEACHER CALL
-# ===========================
+# ============================================================
 @torch.no_grad()
 def call_teacher_qwen(image_path: str, question: str, expected_type: str):
     try:
@@ -112,7 +116,7 @@ def call_teacher_qwen(image_path: str, question: str, expected_type: str):
 
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 
-TRẢ LỜI THEO ĐÚNG FORMAT:
+TRẢ LỜI THEO FORMAT:
 
 <answer>Câu trả lời ngắn</answer>
 <reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
@@ -174,9 +178,9 @@ TRẢ LỜI THEO ĐÚNG FORMAT:
         return None
 
 
-# ===========================
+# ============================================================
 # MAIN LOOP (RESUME SAFE)
-# ===========================
+# ============================================================
 df = pd.read_csv(CSV_PATH)
 print(f"[INFO] Total rows: {len(df)}")
 
@@ -185,7 +189,7 @@ buffer = []
 for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
 
-    # SKIP if already done
+    # skip nếu đã có trong file cũ
     if image_id in done:
         continue
 
@@ -196,30 +200,30 @@ for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     question = str(row["question"]).strip()
     expected_type = row["reasoning_type"]
 
-    r = call_teacher_qwen(image_path, question, expected_type)
-    if r is None or not r["answer"]:
+    res = call_teacher_qwen(image_path, question, expected_type)
+    if res is None or not res["answer"]:
         continue
 
     buffer.append({
         "img_id": image_id,
         "image_path": image_path,
         "question": question,
-        "reasoning_type": r["reasoning_type"],
-        "teacher_answer": r["answer"],
-        "teacher_reasoning": r["reasoning"],
-        "teacher_raw": r["raw"],
-        "reasoning_weight": r["reasoning_weight"]
+        "reasoning_type": res["reasoning_type"],
+        "teacher_answer": res["answer"],
+        "teacher_reasoning": res["reasoning"],
+        "teacher_raw": res["raw"],
+        "reasoning_weight": res["reasoning_weight"]
     })
 
-    # Append every N samples
     if len(buffer) >= SAVE_EVERY:
         save_append(buffer, OUT_JSONL)
-        for item in buffer:
-            done.add(item["img_id"])
+        for o in buffer:
+            done.add(o["img_id"])
         buffer = []
         torch.cuda.empty_cache()
 
 # Final flush
 save_append(buffer, OUT_JSONL)
 
-print(f"[INFO] ✅ Completed. Total saved: {len(done)} lines → {OUT_JSONL}")
+print(f"[INFO] ✅ Completed. New samples saved to {OUT_JSONL}")
+print(f"[INFO] Total completed (old + new): {len(done)}")
