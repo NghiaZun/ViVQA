@@ -1,6 +1,6 @@
 """
-teacher_generate_resume_from_uploaded.py – Resume from uploaded old JSONL
-Author: Nghia-Duong
+teacher_generate_resume.py – Stable RESUME version
+Author: Nghia-Duong (resume + safe checkpoint)
 """
 
 import os
@@ -12,22 +12,15 @@ import torch
 from tqdm import tqdm
 from transformers import AutoProcessor, AutoModelForVision2Seq
 
-
-# ============================================================
+# ===========================
 # CONFIG
-# ============================================================
+# ===========================
 CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-
-# === bạn upload file JSONL cũ lên Kaggle rồi ===
-OLD_JSONL = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
-
-# output mới sẽ được tiếp tục ghi ra đây
-OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
-
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
 
-SAVE_EVERY = 50  # buffer flush
+OLD_JSONL = "/kaggle/input/teacher-checkpoint-old/teacher_outputs.jsonl"   # <--- CHECKPOINT CŨ
+OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"                       # <--- OUTPUT MỚI
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -39,10 +32,11 @@ REASONING_WEIGHTS = {
     "COMMONSENSE": 1.0
 }
 
+SAVE_INTERVAL = 200  # checkpoint định kỳ
 
-# ============================================================
+# ===========================
 # LOAD MODEL
-# ============================================================
+# ===========================
 device = "cuda:0"
 print(f"[INFO] Using device: {device}")
 
@@ -57,9 +51,9 @@ model = AutoModelForVision2Seq.from_pretrained(
 model.eval()
 
 
-# ============================================================
-# PARSE TEACHER OUTPUT
-# ============================================================
+# ===========================
+# PARSE OUTPUT
+# ===========================
 def parse_structured_output(text: str):
     answer, reasoning, reasoning_type = "", "", ""
 
@@ -67,48 +61,43 @@ def parse_structured_output(text: str):
     if m1:
         answer = m1.group(1).strip()
 
-    m2 = re.search(r"<reasoning>\s*\[(\w+)\]\s*(.*?)</reasoning>", text, re.S)
+    m2 = re.search(r"<reasoning>\s*\[(.*?)\]\s*(.*?)</reasoning>", text, re.S)
     if m2:
-        reasoning_type = m2.group(1).upper()
+        reasoning_type = m2.group(1).strip().upper()
         reasoning = m2.group(2).strip()
 
     return answer, reasoning, reasoning_type
 
 
-# ============================================================
-# LOAD OLD COMPLETED IDS
-# ============================================================
+# ===========================
+# LOAD OLD CHECKPOINT
+# ===========================
 done = set()
+results = []
 
 if os.path.exists(OLD_JSONL):
+    print(f"[INFO] Loading old checkpoint from {OLD_JSONL}")
     with open(OLD_JSONL, "r", encoding="utf-8") as f:
         for line in f:
             try:
                 obj = json.loads(line)
-                done.add(str(obj["img_id"]))
+                img_id = str(obj["img_id"])
+                done.add(img_id)
+                results.append(obj)
             except:
                 pass
 
-print(f"[INFO] Resume loaded {len(done)} completed items from old JSONL")
+print(f"[INFO] Resume loaded: {len(done)} items already completed")
 
 
-# ============================================================
-# SAVE (APPEND)
-# ============================================================
-def save_append(records, path):
-    with open(path, "a", encoding="utf-8") as f:
-        for r in records:
-            f.write(json.dumps(r, ensure_ascii=False) + "\n")
-
-
-# ============================================================
+# ===========================
 # TEACHER CALL
-# ============================================================
+# ===========================
 @torch.no_grad()
 def call_teacher_qwen(image_path: str, question: str, expected_type: str):
     try:
         image = Image.open(image_path).convert("RGB")
-    except Exception:
+    except:
         return None
 
     from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
@@ -116,7 +105,7 @@ def call_teacher_qwen(image_path: str, question: str, expected_type: str):
 
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 
-TRẢ LỜI THEO FORMAT:
+BẠN PHẢI TRẢ LỜI THEO FORMAT:
 
 <answer>Câu trả lời ngắn</answer>
 <reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
@@ -131,11 +120,7 @@ TRẢ LỜI THEO FORMAT:
     ]
 
     try:
-        text_prompt = processor.apply_chat_template(
-            messages,
-            tokenize=False,
-            add_generation_prompt=True
-        )
+        text_prompt = processor.apply_chat_template(messages, tokenize=False, add_generation_prompt=True)
 
         inputs = processor(
             text=[text_prompt],
@@ -144,7 +129,7 @@ TRẢ LỜI THEO FORMAT:
             return_tensors="pt"
         ).to(device)
 
-        with torch.amp.autocast('cuda'):
+        with torch.amp.autocast("cuda"):
             output = model.generate(
                 **inputs,
                 max_new_tokens=150,
@@ -153,7 +138,7 @@ TRẢ LỜI THEO FORMAT:
                 top_p=0.85,
                 top_k=40,
                 use_cache=True,
-                pad_token_id=processor.tokenizer.pad_token_id
+                pad_token_id=processor.tokenizer.pad_token_id,
             )
 
         gen = processor.batch_decode(
@@ -174,56 +159,63 @@ TRẢ LỜI THEO FORMAT:
         }
 
     except Exception as e:
-        print(f"[ERROR] {image_path}: {e}")
+        print(f"[ERROR] Generation failed for {image_path}: {e}")
         return None
 
 
-# ============================================================
-# MAIN LOOP (RESUME SAFE)
-# ============================================================
+# ===========================
+# MAIN LOOP (RESUME)
+# ===========================
 df = pd.read_csv(CSV_PATH)
 print(f"[INFO] Total rows: {len(df)}")
+print(f"[INFO] Remaining after resume: {len(df) - len(done)}")
 
-buffer = []
+processed = len(results)
 
 for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
 
-    # skip nếu đã có trong file cũ
     if image_id in done:
         continue
 
-    image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
-    if not os.path.exists(image_path):
+    img_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
+    if not os.path.exists(img_path):
         continue
 
-    question = str(row["question"]).strip()
+    q = str(row["question"]).strip()
     expected_type = row["reasoning_type"]
 
-    res = call_teacher_qwen(image_path, question, expected_type)
-    if res is None or not res["answer"]:
-        continue
+    res = call_teacher_qwen(img_path, q, expected_type)
 
-    buffer.append({
-        "img_id": image_id,
-        "image_path": image_path,
-        "question": question,
-        "reasoning_type": res["reasoning_type"],
-        "teacher_answer": res["answer"],
-        "teacher_reasoning": res["reasoning"],
-        "teacher_raw": res["raw"],
-        "reasoning_weight": res["reasoning_weight"]
-    })
+    if res and res["answer"]:
+        results.append({
+            "img_id": image_id,
+            "image_path": img_path,
+            "question": q,
+            "reasoning_type": res["reasoning_type"],
+            "teacher_answer": res["answer"],
+            "teacher_reasoning": res["reasoning"],
+            "teacher_raw": res["raw"],
+            "reasoning_weight": res["reasoning_weight"]
+        })
+        done.add(image_id)
+        processed += 1
 
-    if len(buffer) >= SAVE_EVERY:
-        save_append(buffer, OUT_JSONL)
-        for o in buffer:
-            done.add(o["img_id"])
-        buffer = []
+    # checkpoint (APPEND, không overwrite)
+    if processed % SAVE_INTERVAL == 0:
+        with open(OUT_JSONL, "w", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"[INFO] ✅ Saved checkpoint: {processed} samples")
+
+    if idx % 100 == 0:
         torch.cuda.empty_cache()
 
-# Final flush
-save_append(buffer, OUT_JSONL)
+# Final save
+with open(OUT_JSONL, "w", encoding="utf-8") as f:
+    for r in results:
+        f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-print(f"[INFO] ✅ Completed. New samples saved to {OUT_JSONL}")
-print(f"[INFO] Total completed (old + new): {len(done)}")
+print(f"\n[INFO] ✅ COMPLETED")
+print(f"[INFO] Total output: {len(results)}")
+print(f"[INFO] Saved to: {OUT_JSONL}")
