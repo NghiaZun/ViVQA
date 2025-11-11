@@ -169,6 +169,7 @@ class DistillationWrapper(nn.Module):
     def extract_teacher_features(self, pixel_values, input_ids, attention_mask):
         """
         Teacher trên CPU - chuyển inputs sang CPU, extract features, rồi chuyển về GPU
+        Qwen2-VL requires specific input format with grid_thw
         """
         with torch.no_grad():
             try:
@@ -177,12 +178,36 @@ class DistillationWrapper(nn.Module):
                 input_ids_cpu = input_ids.to("cpu")
                 attention_mask_cpu = attention_mask.to("cpu")
                 
-                # Extract features trên CPU
-                vision_outputs = self.teacher.visual(pixel_values_cpu)
-                v_teacher = getattr(vision_outputs, 'pooler_output', 
-                                   vision_outputs.last_hidden_state.mean(1))
+                batch_size = pixel_values_cpu.shape[0]
                 
-                text_outputs = self.teacher.language_model.get_input_embeddings()(input_ids_cpu)
+                # Qwen2-VL vision encoder cần grid_thw parameter
+                # grid_thw shape: [batch_size, 3] - (temporal, height, width)
+                # Cho static image: temporal=1, height và width từ image size
+                image_size = pixel_values_cpu.shape[-2:]  # (H, W)
+                grid_h = image_size[0] // 14  # Qwen2-VL patch size = 14
+                grid_w = image_size[1] // 14
+                grid_thw = torch.tensor(
+                    [[1, grid_h, grid_w]] * batch_size, 
+                    dtype=torch.long, 
+                    device="cpu"
+                )
+                
+                # Extract vision features với grid_thw
+                vision_outputs = self.teacher.visual(
+                    pixel_values_cpu, 
+                    grid_thw=grid_thw
+                )
+                # Qwen2-VL returns tuple: (hidden_states, )
+                if isinstance(vision_outputs, tuple):
+                    vision_hidden = vision_outputs[0]
+                else:
+                    vision_hidden = vision_outputs
+                
+                # Pool vision features
+                v_teacher = vision_hidden.mean(dim=1)  # [batch, hidden_dim]
+                
+                # Extract text embeddings
+                text_outputs = self.teacher.model.embed_tokens(input_ids_cpu)
                 t_teacher = text_outputs.mean(1)
                 
                 fusion_teacher = torch.cat([v_teacher, t_teacher], dim=-1)
@@ -195,6 +220,8 @@ class DistillationWrapper(nn.Module):
                 return v_teacher, t_teacher, fusion_teacher
             except Exception as e:
                 print(f"[WARNING] Teacher extraction failed: {e}")
+                import traceback
+                traceback.print_exc()
                 return None, None, None
 
     def forward(self, pixel_values, input_ids, attention_mask, labels, **kwargs):
@@ -224,7 +251,13 @@ class DistillationWrapper(nn.Module):
             pixel_values, input_ids, attention_mask
         )
         
+        # Nếu teacher extraction thất bại, chỉ dùng CE loss
         if v_teacher is None:
+            # Set distillation losses = 0 để không ảnh hưởng total loss
+            losses['feature_vision'] = torch.tensor(0.0, device=ce_loss.device)
+            losses['feature_text'] = torch.tensor(0.0, device=ce_loss.device)
+            losses['feature_fusion'] = torch.tensor(0.0, device=ce_loss.device)
+            losses['contrastive'] = torch.tensor(0.0, device=ce_loss.device)
             return losses, student_logits
 
         # Feature distillation losses
