@@ -39,10 +39,10 @@ class Config:
     
     # Training
     EPOCHS = 15
-    BATCH_SIZE = 6
+    BATCH_SIZE = 2
     LR = 5e-6
     WARMUP_RATIO = 0.1
-    GRADIENT_ACCUM_STEPS = 2
+    GRADIENT_ACCUM_STEPS = 4
     
     # Distillation loss weights
     LOSS_WEIGHTS = {
