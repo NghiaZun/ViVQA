@@ -476,8 +476,6 @@ def main():
     print("\n[INFO] Loading student model...")
     student = VQAGenModel(
         vision_model_name="Salesforce/blip-vqa-base",
-        phobert_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer",
-        vit5_dir="/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
     )
     
     if os.path.exists(cfg.STUDENT_CKPT):
