@@ -1,18 +1,17 @@
 """
 Full Knowledge Distillation Training for VQA Student (XML Output)
+- Teacher OFFLOADED TO CPU (giảm VRAM từ 15GB → 4GB)
 - Memory-efficient for 16GB GPU
 - Fixed fusion module issue
 - Mixed precision (AMP) using new API
-Author: Refined by ChatGPT
+Author: Optimized for CPU Teacher
 """
 
 import os
 import json
-import re
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
-import pandas as pd
 from tqdm import tqdm
 from PIL import Image
 from torch.utils.data import DataLoader, Dataset
@@ -36,7 +35,7 @@ class Config:
     SAVE_NAME = "student_distilled_xml"
 
     EPOCHS = 15
-    BATCH_SIZE = 2   # reduced for memory
+    BATCH_SIZE = 2
     LR = 5e-6
     WARMUP_RATIO = 0.1
     GRADIENT_ACCUM_STEPS = 4
@@ -142,20 +141,20 @@ class FusionModule(nn.Module):
         return self.mlp(x)
 
 # =========================
-# DISTILLATION WRAPPER
+# DISTILLATION WRAPPER (TEACHER ON CPU)
 # =========================
 class DistillationWrapper(nn.Module):
     def __init__(self, student_model, teacher_model, cfg):
         super().__init__()
         self.student = student_model
-        self.teacher = teacher_model
+        self.teacher = teacher_model  # Already on CPU
         self.cfg = cfg
 
         for p in self.teacher.parameters():
             p.requires_grad = False
         self.teacher.eval()
 
-        # Example dims
+        # Dimensions
         student_vision_dim = 768
         teacher_vision_dim = 1536
         student_text_dim = 768
@@ -168,22 +167,46 @@ class DistillationWrapper(nn.Module):
         self.fusion_projector = nn.Linear(student_fusion_dim, teacher_fusion_dim)
 
     def extract_teacher_features(self, pixel_values, input_ids, attention_mask):
+        """
+        Teacher trên CPU - chuyển inputs sang CPU, extract features, rồi chuyển về GPU
+        """
         with torch.no_grad():
             try:
-                vision_outputs = self.teacher.visual(pixel_values)
-                v_teacher = getattr(vision_outputs, 'pooler_output', vision_outputs.last_hidden_state.mean(1))
-                text_outputs = self.teacher.language_model.get_input_embeddings()(input_ids)
+                # Chuyển inputs sang CPU với dtype phù hợp
+                pixel_values_cpu = pixel_values.to("cpu", dtype=torch.float16)
+                input_ids_cpu = input_ids.to("cpu")
+                attention_mask_cpu = attention_mask.to("cpu")
+                
+                # Extract features trên CPU
+                vision_outputs = self.teacher.visual(pixel_values_cpu)
+                v_teacher = getattr(vision_outputs, 'pooler_output', 
+                                   vision_outputs.last_hidden_state.mean(1))
+                
+                text_outputs = self.teacher.language_model.get_input_embeddings()(input_ids_cpu)
                 t_teacher = text_outputs.mean(1)
+                
                 fusion_teacher = torch.cat([v_teacher, t_teacher], dim=-1)
+                
+                # Chuyển features về GPU để tính loss
+                v_teacher = v_teacher.to(self.cfg.device, dtype=torch.float32)
+                t_teacher = t_teacher.to(self.cfg.device, dtype=torch.float32)
+                fusion_teacher = fusion_teacher.to(self.cfg.device, dtype=torch.float32)
+                
                 return v_teacher, t_teacher, fusion_teacher
-            except:
+            except Exception as e:
+                print(f"[WARNING] Teacher extraction failed: {e}")
                 return None, None, None
 
     def forward(self, pixel_values, input_ids, attention_mask, labels, **kwargs):
+        # Student features (trên GPU)
         v_student = self.student.vision_encoder(pixel_values).last_hidden_state.mean(1)
-        t_student = self.student.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state.mean(1)
+        t_student = self.student.text_encoder(
+            input_ids=input_ids, 
+            attention_mask=attention_mask
+        ).last_hidden_state.mean(1)
         fusion_student = self.student.fusion(v_student, t_student)
 
+        # CE loss từ student
         ce_loss, student_logits = self.student(
             pixel_values=pixel_values,
             input_ids=input_ids,
@@ -193,16 +216,26 @@ class DistillationWrapper(nn.Module):
 
         losses = {'ce': ce_loss}
 
-        v_teacher, t_teacher, fusion_teacher = self.extract_teacher_features(pixel_values, input_ids, attention_mask)
+        # Teacher features (extract trên CPU)
+        v_teacher, t_teacher, fusion_teacher = self.extract_teacher_features(
+            pixel_values, input_ids, attention_mask
+        )
+        
         if v_teacher is None:
             return losses, student_logits
 
-        # Feature losses
-        losses['feature_vision'] = F.mse_loss(self.vision_projector(v_student), v_teacher)
-        losses['feature_text'] = F.mse_loss(self.text_projector(t_student), t_teacher)
-        losses['feature_fusion'] = F.mse_loss(self.fusion_projector(fusion_student), fusion_teacher)
+        # Feature distillation losses
+        losses['feature_vision'] = F.mse_loss(
+            self.vision_projector(v_student), v_teacher
+        )
+        losses['feature_text'] = F.mse_loss(
+            self.text_projector(t_student), t_teacher
+        )
+        losses['feature_fusion'] = F.mse_loss(
+            self.fusion_projector(fusion_student), fusion_teacher
+        )
 
-        # Contrastive
+        # Contrastive loss
         fusion_student_norm = F.normalize(fusion_student, dim=-1)
         fusion_teacher_norm = F.normalize(fusion_teacher, dim=-1)
         logits_contrast = torch.matmul(fusion_student_norm, fusion_teacher_norm.T) / 0.5
@@ -223,14 +256,15 @@ class DistillationWrapper(nn.Module):
 # =========================
 def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
     model.train()
-    model.teacher.eval()
+    model.teacher.eval()  # Teacher luôn ở eval mode
     total_losses = {k:0.0 for k in cfg.LOSS_WEIGHTS}
     total_sum = 0.0
     progress = tqdm(loader, desc=f"Epoch {epoch+1}/{cfg.EPOCHS}")
     optimizer.zero_grad()
 
     for step, batch in enumerate(progress):
-        batch = {k:v.to(cfg.device) if torch.is_tensor(v) else v for k,v in batch.items()}
+        batch = {k:v.to(cfg.device) if torch.is_tensor(v) else v 
+                 for k,v in batch.items()}
 
         with torch.amp.autocast(device_type="cuda", enabled=True):
             losses, _ = model(
@@ -267,24 +301,32 @@ def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
 def main():
     print(f"[INFO] Device: {cfg.device}")
 
-    # Student
+    # ✅ STUDENT: Load lên GPU
     student = VQAGenModel(vision_model_name="Salesforce/blip-vqa-base")
-    student.vision_encoder.gradient_checkpointing_enable()  # memory saving
+    student.vision_encoder.gradient_checkpointing_enable()
     if os.path.exists(cfg.STUDENT_CKPT):
         student.load_state_dict(torch.load(cfg.STUDENT_CKPT, map_location='cpu'))
-    student.fusion = FusionModule(input_dim=768*2, hidden_dim=768)  # fix fusion
+    student.fusion = FusionModule(input_dim=768*2, hidden_dim=768)
     student.to(cfg.device)
+    print(f"[INFO] Student loaded on {cfg.device}")
 
-    # Teacher
+    # ✅ TEACHER: OFFLOAD TO CPU HOÀN TOÀN
+    print("[INFO] Loading teacher model on CPU (this may take a moment)...")
     teacher = AutoModelForVision2Seq.from_pretrained(
-        cfg.TEACHER_MODEL, torch_dtype=torch.float16, device_map="auto",
-        trust_remote_code=True, low_cpu_mem_usage=True
+        cfg.TEACHER_MODEL,
+        torch_dtype=torch.float16,
+        device_map="cpu",  # ✅ CRITICAL: Offload to CPU
+        trust_remote_code=True,
+        low_cpu_mem_usage=True
     )
     teacher.eval()
+    print("[INFO] Teacher loaded on CPU successfully")
 
+    # Vision processor
     vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
-    vision_processor.size = 224  # reduce memory
+    vision_processor.size = 224
 
+    # Dataset
     dataset = XMLDistillationDataset(
         jsonl_path=cfg.TEACHER_DATA,
         vision_processor=vision_processor,
@@ -294,10 +336,27 @@ def main():
         max_output_len=cfg.MAX_OUTPUT_LEN
     )
 
-    loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
+    loader = DataLoader(
+        dataset, 
+        batch_size=cfg.BATCH_SIZE, 
+        shuffle=True, 
+        num_workers=4, 
+        pin_memory=True
+    )
 
-    model = DistillationWrapper(student, teacher, cfg).to(cfg.device)
+    # Wrapper model (student on GPU, teacher on CPU)
+    model = DistillationWrapper(student, teacher, cfg)
+    model.student.to(cfg.device)  # Ensure student on GPU
+    # Teacher stays on CPU (already set via device_map="cpu")
+    
+    # Move projectors to GPU
+    model.vision_projector.to(cfg.device)
+    model.text_projector.to(cfg.device)
+    model.fusion_projector.to(cfg.device)
+    
+    print("[INFO] Model setup complete: Student on GPU, Teacher on CPU")
 
+    # Optimizer
     optimizer = torch.optim.AdamW([
         {'params': model.student.decoder.parameters(), 'lr': cfg.LR},
         {'params': model.student.fusion.parameters(), 'lr': cfg.LR*0.5},
@@ -308,7 +367,8 @@ def main():
 
     num_steps = (len(loader)//cfg.GRADIENT_ACCUM_STEPS)*cfg.EPOCHS
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer, num_warmup_steps=int(cfg.WARMUP_RATIO*num_steps),
+        optimizer, 
+        num_warmup_steps=int(cfg.WARMUP_RATIO*num_steps),
         num_training_steps=num_steps
     )
 
@@ -316,23 +376,30 @@ def main():
     best_loss = float('inf')
     early_stop_counter = 0
 
+    # Training loop
     for epoch in range(cfg.EPOCHS):
         torch.cuda.empty_cache()
-        avg_total, avg_losses = train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg)
-        print(f"[INFO] Epoch {epoch+1} Total Loss: {avg_total:.4f}")
+        avg_total, avg_losses = train_epoch(
+            model, loader, optimizer, scheduler, scaler, epoch, cfg
+        )
+        print(f"\n[INFO] Epoch {epoch+1} Total Loss: {avg_total:.4f}")
         for k,v in avg_losses.items():
             print(f"  {k}: {v:.4f}")
 
-        # Save best
+        # Save best model
         if avg_total < best_loss - 1e-4:
             best_loss = avg_total
             early_stop_counter = 0
-            torch.save(model.student.state_dict(), os.path.join(cfg.SAVE_DIR, f"{cfg.SAVE_NAME}_best.pt"))
+            save_path = os.path.join(cfg.SAVE_DIR, f"{cfg.SAVE_NAME}_best.pt")
+            torch.save(model.student.state_dict(), save_path)
+            print(f"[INFO] Best model saved: {save_path}")
         else:
             early_stop_counter += 1
             if early_stop_counter >= cfg.EARLY_STOP_PATIENCE:
                 print(f"[INFO] Early stopping at epoch {epoch+1}")
                 break
+
+    print("[INFO] Training completed!")
 
 if __name__ == "__main__":
     main()
