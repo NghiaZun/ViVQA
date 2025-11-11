@@ -79,7 +79,6 @@ class XMLDistillationDataset(Dataset):
             for line in f:
                 try:
                     data = json.loads(line.strip())
-                    # Only include samples with valid teacher outputs
                     if data.get("teacher_answer") and data.get("teacher_reasoning"):
                         self.samples.append(data)
                 except:
@@ -97,48 +96,32 @@ class XMLDistillationDataset(Dataset):
         return len(self.samples)
     
     def format_xml_output(self, answer, reasoning, reasoning_type):
-        """Format output as XML"""
-        xml_output = f"<answer>{answer}</answer><reasoning>[{reasoning_type}] {reasoning}</reasoning>"
-        return xml_output
+        return f"<answer>{answer}</answer><reasoning>[{reasoning_type}] {reasoning}</reasoning>"
     
     def __getitem__(self, idx):
         s = self.samples[idx]
         q = s["question"]
         img_path = s["image_path"]
-        
-        # Teacher outputs
         answer = s.get("teacher_answer", "").strip()
         reasoning = s.get("teacher_reasoning", "").strip()
         reasoning_type = s.get("reasoning_type", "DESCRIPTIVE").upper()
         
-        # Load image
         try:
             image = Image.open(img_path).convert("RGB")
         except:
             image = Image.new("RGB", (224, 224), (255, 255, 255))
         
-        # Process vision input
         pixel_values = self.vision_processor(image, return_tensors="pt").pixel_values[0]
         
-        # Process question
         q_enc = self.text_tokenizer(
-            q, 
-            truncation=True, 
-            padding="max_length",
-            max_length=self.max_q_len, 
-            return_tensors="pt"
+            q, truncation=True, padding="max_length",
+            max_length=self.max_q_len, return_tensors="pt"
         )
         
-        # Format target as XML
         xml_target = self.format_xml_output(answer, reasoning, reasoning_type)
-        
-        # Tokenize XML target
         labels = self.decoder_tokenizer(
-            xml_target, 
-            truncation=True, 
-            padding="max_length",
-            max_length=self.max_output_len, 
-            return_tensors="pt"
+            xml_target, truncation=True, padding="max_length",
+            max_length=self.max_output_len, return_tensors="pt"
         ).input_ids[0]
         
         return {
@@ -148,7 +131,7 @@ class XMLDistillationDataset(Dataset):
             "labels": labels,
             "image_path": img_path,
             "question": q,
-            "xml_target": xml_target  # For debugging
+            "xml_target": xml_target
         }
 
 # =========================
@@ -159,8 +142,8 @@ class DistillationWrapper(nn.Module):
     
     def __init__(self, student_model, teacher_model, cfg):
         super().__init__()
-        self.student = student_model
-        self.teacher = teacher_model
+        self.student = student_model.to(cfg.device)  # Move student only
+        self.teacher = teacher_model  # Teacher stays on meta / device_map
         self.cfg = cfg
         
         # Freeze teacher
@@ -168,145 +151,70 @@ class DistillationWrapper(nn.Module):
             p.requires_grad = False
         self.teacher.eval()
         
-        # Get feature dimensions (adjust based on your model)
-        student_vision_dim = 768   # BLIP-base
-        teacher_vision_dim = 1536  # Qwen2-VL (check actual dim)
-        
-        student_text_dim = 768     # PhoBERT-base
-        teacher_text_dim = 1536    
-        
-        student_fusion_dim = 768   # Your fusion layer
-        teacher_fusion_dim = 1536
-        
         # Projection layers
-        self.vision_projector = nn.Linear(student_vision_dim, teacher_vision_dim)
-        self.text_projector = nn.Linear(student_text_dim, teacher_text_dim)
-        self.fusion_projector = nn.Linear(student_fusion_dim, teacher_fusion_dim)
+        self.vision_projector = nn.Linear(768, 1536)
+        self.text_projector = nn.Linear(768, 1536)
+        self.fusion_projector = nn.Linear(768, 1536)
         
     def extract_teacher_features(self, pixel_values, input_ids, attention_mask):
-        """
-        Extract intermediate features from teacher
-        Note: This is simplified - adjust based on your teacher's actual API
-        """
         with torch.no_grad():
             try:
-                # For Qwen2-VL or similar teachers
-                # You may need to adapt this based on actual teacher architecture
-                
-                # Get vision features (pooled)
                 vision_outputs = self.teacher.visual(pixel_values)
-                if hasattr(vision_outputs, 'pooler_output'):
-                    v_teacher = vision_outputs.pooler_output
-                else:
-                    v_teacher = vision_outputs.last_hidden_state.mean(dim=1)
+                v_teacher = getattr(vision_outputs, "pooler_output", vision_outputs.last_hidden_state.mean(1))
                 
-                # Get text features (pooled)
                 text_outputs = self.teacher.language_model.get_input_embeddings()(input_ids)
                 t_teacher = text_outputs.mean(dim=1)
                 
-                # Fusion (if teacher has explicit fusion layer)
-                # Otherwise, use concatenation
                 fusion_teacher = torch.cat([v_teacher, t_teacher], dim=-1)
                 if fusion_teacher.size(-1) != v_teacher.size(-1):
-                    # Project to match dimension
-                    fusion_teacher = F.adaptive_avg_pool1d(
-                        fusion_teacher.unsqueeze(1), 
-                        v_teacher.size(-1)
-                    ).squeeze(1)
+                    fusion_teacher = F.adaptive_avg_pool1d(fusion_teacher.unsqueeze(1), v_teacher.size(-1)).squeeze(1)
                 
                 return v_teacher, t_teacher, fusion_teacher
-                
             except Exception as e:
                 print(f"[WARNING] Teacher feature extraction failed: {e}")
-                print("[INFO] Falling back to CE-only training")
                 return None, None, None
     
     def forward(self, pixel_values, input_ids, attention_mask, labels, 
                 image_path=None, question=None, xml_target=None):
-        """
-        Forward pass with distillation losses
-        
-        Returns:
-            losses: dict of individual losses
-            student_logits: for evaluation
-        """
         batch_size = pixel_values.size(0)
-        
-        # ==================
-        # STUDENT FORWARD
-        # ==================
-        # Extract student features
         vision_output = self.student.vision_encoder(pixel_values)
-        v_student = vision_output.last_hidden_state.mean(dim=1)  # Pool
+        v_student = vision_output.last_hidden_state.mean(dim=1)
         
-        text_output = self.student.text_encoder(
-            input_ids=input_ids,
-            attention_mask=attention_mask
-        )
-        t_student = text_output.last_hidden_state.mean(dim=1)  # Pool
+        text_output = self.student.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
+        t_student = text_output.last_hidden_state.mean(dim=1)
         
-        # Fusion
         fusion_student = self.student.fusion(v_student, t_student)
         
-        # Decoder: Generate XML output
         ce_loss, student_logits = self.student(
             pixel_values=pixel_values,
             input_ids=input_ids,
             attention_mask=attention_mask,
             labels=labels
         )
-        
         losses = {'ce': ce_loss}
         
-        # ==================
-        # TEACHER FEATURES
-        # ==================
-        v_teacher, t_teacher, fusion_teacher = self.extract_teacher_features(
-            pixel_values, input_ids, attention_mask
-        )
-        
+        v_teacher, t_teacher, fusion_teacher = self.extract_teacher_features(pixel_values, input_ids, attention_mask)
         if v_teacher is None:
-            # Teacher extraction failed, only use CE loss
             return losses, student_logits
         
-        # ==================
-        # DISTILLATION LOSSES
-        # ==================
-        
-        # 1. Feature Matching: Vision
         v_student_proj = self.vision_projector(v_student)
-        loss_feat_vision = F.mse_loss(v_student_proj, v_teacher)
-        losses['feature_vision'] = loss_feat_vision
+        losses['feature_vision'] = F.mse_loss(v_student_proj, v_teacher)
         
-        # 2. Feature Matching: Text
         t_student_proj = self.text_projector(t_student)
-        loss_feat_text = F.mse_loss(t_student_proj, t_teacher)
-        losses['feature_text'] = loss_feat_text
+        losses['feature_text'] = F.mse_loss(t_student_proj, t_teacher)
         
-        # 3. Feature Matching: Fusion
         fusion_student_proj = self.fusion_projector(fusion_student)
-        loss_feat_fusion = F.mse_loss(fusion_student_proj, fusion_teacher)
-        losses['feature_fusion'] = loss_feat_fusion
+        losses['feature_fusion'] = F.mse_loss(fusion_student_proj, fusion_teacher)
         
-        # 4. Contrastive Distillation
-        # Align student-teacher pairs in embedding space
         fusion_student_norm = F.normalize(fusion_student, dim=-1)
         fusion_teacher_norm = F.normalize(fusion_teacher, dim=-1)
-        
-        # Similarity matrix [B, B]
-        logits_contrast = torch.matmul(
-            fusion_student_norm, 
-            fusion_teacher_norm.T
-        ) / 0.5  # Temperature
-        
+        logits_contrast = torch.matmul(fusion_student_norm, fusion_teacher_norm.T) / 0.5
         labels_contrast = torch.arange(batch_size, device=pixel_values.device)
-        loss_contrastive = F.cross_entropy(logits_contrast, labels_contrast)
-        losses['contrastive'] = loss_contrastive
+        losses['contrastive'] = F.cross_entropy(logits_contrast, labels_contrast)
         
         return losses, student_logits
     
     def compute_total_loss(self, losses):
-        """Weighted sum of all losses"""
         total = 0.0
         for key, loss in losses.items():
             if key in self.cfg.LOSS_WEIGHTS:
@@ -317,46 +225,30 @@ class DistillationWrapper(nn.Module):
 # GENERATION UTILITIES
 # =========================
 def parse_xml_output(text):
-    """Parse XML-formatted output"""
-    answer = ""
-    reasoning = ""
-    reasoning_type = ""
-    
-    # Extract answer
+    answer, reasoning, reasoning_type = "", "", ""
     m1 = re.search(r"<answer>(.*?)</answer>", text, re.S)
     if m1:
         answer = m1.group(1).strip()
-    
-    # Extract reasoning
     m2 = re.search(r"<reasoning>\s*\[(\w+)\]\s*(.*?)</reasoning>", text, re.S)
     if m2:
         reasoning_type = m2.group(1).upper()
         reasoning = m2.group(2).strip()
-    
     return answer, reasoning, reasoning_type
 
 @torch.no_grad()
 def generate_sample(model, sample, device):
-    """Generate XML output for a single sample"""
     model.eval()
-    
     pixel_values = sample['pixel_values'].unsqueeze(0).to(device)
     input_ids = sample['input_ids'].unsqueeze(0).to(device)
     attention_mask = sample['attention_mask'].unsqueeze(0).to(device)
     
-    # Get encoder outputs
     vision_output = model.student.vision_encoder(pixel_values)
     v_pooled = vision_output.last_hidden_state.mean(dim=1)
     
-    text_output = model.student.text_encoder(
-        input_ids=input_ids,
-        attention_mask=attention_mask
-    )
+    text_output = model.student.text_encoder(input_ids=input_ids, attention_mask=attention_mask)
     t_pooled = text_output.last_hidden_state.mean(dim=1)
     
     fusion = model.student.fusion(v_pooled, t_pooled)
-    
-    # Generate with decoder
     generated_ids = model.student.decoder.generate(
         inputs_embeds=fusion.unsqueeze(1),
         max_length=cfg.MAX_OUTPUT_LEN,
@@ -365,17 +257,10 @@ def generate_sample(model, sample, device):
         pad_token_id=model.student.decoder_tokenizer.pad_token_id,
         eos_token_id=model.student.decoder_tokenizer.eos_token_id
     )
-    
-    # Decode
-    generated_text = model.student.decoder_tokenizer.decode(
-        generated_ids[0], 
-        skip_special_tokens=True
-    )
-    
-    return generated_text
+    return model.student.decoder_tokenizer.decode(generated_ids[0], skip_special_tokens=True)
 
 # =========================
-# TRAINING LOOP
+# TRAIN / VALIDATION
 # =========================
 def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
     model.train()
@@ -388,11 +273,7 @@ def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
     optimizer.zero_grad()
     
     for step, batch in enumerate(progress):
-        # Move to device
-        batch = {k: v.to(cfg.device) if torch.is_tensor(v) else v 
-                 for k, v in batch.items()}
-        
-        # Forward with AMP
+        batch = {k: v.to(cfg.device) if torch.is_tensor(v) else v for k, v in batch.items()}
         with torch.cuda.amp.autocast(enabled=True):
             losses, logits = model(
                 pixel_values=batch['pixel_values'],
@@ -401,13 +282,9 @@ def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
                 labels=batch['labels'],
                 xml_target=batch.get('xml_target')
             )
-            total_loss = model.compute_total_loss(losses)
-            total_loss = total_loss / cfg.GRADIENT_ACCUM_STEPS
+            total_loss = model.compute_total_loss(losses) / cfg.GRADIENT_ACCUM_STEPS
         
-        # Backward
         scaler.scale(total_loss).backward()
-        
-        # Update
         if (step + 1) % cfg.GRADIENT_ACCUM_STEPS == 0:
             scaler.unscale_(optimizer)
             torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
@@ -416,7 +293,6 @@ def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
             optimizer.zero_grad()
             scheduler.step()
         
-        # Logging
         for key, val in losses.items():
             total_losses[key] += val.item()
         total_loss_sum += total_loss.item() * cfg.GRADIENT_ACCUM_STEPS
@@ -427,42 +303,29 @@ def train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg):
             'lr': f"{scheduler.get_last_lr()[0]:.2e}"
         })
     
-    # Average losses
     num_batches = len(loader)
     avg_losses = {key: val / num_batches for key, val in total_losses.items()}
     avg_total = total_loss_sum / num_batches
-    
     return avg_total, avg_losses
 
-# =========================
-# VALIDATION
-# =========================
 @torch.no_grad()
 def validate(model, loader, cfg, num_samples=5):
-    """Validate and show sample generations"""
     model.eval()
-    
     print("\n" + "="*60)
     print("VALIDATION SAMPLES")
     print("="*60)
-    
     for i, batch in enumerate(loader):
         if i >= num_samples:
             break
-        
         sample = {k: v[0] for k, v in batch.items() if torch.is_tensor(v)}
         generated_text = generate_sample(model, sample, cfg.device)
-        
-        # Parse outputs
         answer, reasoning, rtype = parse_xml_output(generated_text)
-        
         print(f"\nSample {i+1}:")
         print(f"Question: {batch['question'][0]}")
         print(f"Target: {batch['xml_target'][0]}")
         print(f"Generated: {generated_text}")
         print(f"  - Answer: {answer}")
         print(f"  - Reasoning: [{rtype}] {reasoning}")
-    
     print("="*60 + "\n")
 
 # =========================
@@ -472,24 +335,18 @@ def main():
     print(f"[INFO] Device: {cfg.device}")
     print(f"[INFO] Loss weights: {cfg.LOSS_WEIGHTS}")
     
-    # Load student
-    print("\n[INFO] Loading student model...")
-    student = VQAGenModel(
-        vision_model_name="Salesforce/blip-vqa-base",
-    )
-    
+    # Student
+    student = VQAGenModel(vision_model_name="Salesforce/blip-vqa-base")
     if os.path.exists(cfg.STUDENT_CKPT):
         print(f"[INFO] Loading pretrained: {cfg.STUDENT_CKPT}")
         student.load_state_dict(torch.load(cfg.STUDENT_CKPT, map_location='cpu'))
     
-    student.to(cfg.device)
-    
-    # Load teacher
-    print("\n[INFO] Loading teacher...")
+    # Teacher
+    print("[INFO] Loading teacher...")
     teacher = AutoModelForVision2Seq.from_pretrained(
         cfg.TEACHER_MODEL,
         torch_dtype=torch.float16,
-        device_map="auto",
+        device_map="auto",   # important: keeps teacher distributed / meta-safe
         trust_remote_code=True,
         low_cpu_mem_usage=True
     )
@@ -505,22 +362,13 @@ def main():
         max_q_len=cfg.MAX_Q_LEN,
         max_output_len=cfg.MAX_OUTPUT_LEN
     )
-    
-    loader = DataLoader(
-        dataset, 
-        batch_size=cfg.BATCH_SIZE, 
-        shuffle=True,
-        num_workers=4,
-        pin_memory=True
-    )
-    
-    # Validation loader
+    loader = DataLoader(dataset, batch_size=cfg.BATCH_SIZE, shuffle=True, num_workers=4, pin_memory=True)
     val_loader = DataLoader(dataset, batch_size=1, shuffle=False)
     
-    # Distillation wrapper
-    model = DistillationWrapper(student, teacher, cfg).to(cfg.device)
+    # Wrap
+    model = DistillationWrapper(student, teacher, cfg)
     
-    # Optimizer
+    # Optimizer & Scheduler
     optimizer = torch.optim.AdamW([
         {'params': model.student.decoder.parameters(), 'lr': cfg.LR},
         {'params': model.student.fusion.parameters(), 'lr': cfg.LR * 0.5},
@@ -531,45 +379,32 @@ def main():
     
     num_steps = (len(loader) // cfg.GRADIENT_ACCUM_STEPS) * cfg.EPOCHS
     scheduler = get_cosine_schedule_with_warmup(
-        optimizer,
-        num_warmup_steps=int(cfg.WARMUP_RATIO * num_steps),
-        num_training_steps=num_steps
+        optimizer, num_warmup_steps=int(cfg.WARMUP_RATIO * num_steps), num_training_steps=num_steps
     )
     
     scaler = torch.cuda.amp.GradScaler()
     
-    # Training
     best_loss = float('inf')
     early_stop_counter = 0
     log_path = os.path.join(cfg.SAVE_DIR, f"{cfg.SAVE_NAME}_log.csv")
-    
     log_df = pd.DataFrame(columns=['epoch', 'total_loss'] + list(cfg.LOSS_WEIGHTS.keys()))
     log_df.to_csv(log_path, index=False)
     
-    print(f"\n[INFO] Training for {cfg.EPOCHS} epochs...")
-    
+    print(f"[INFO] Training for {cfg.EPOCHS} epochs...")
     for epoch in range(cfg.EPOCHS):
-        avg_total, avg_losses = train_epoch(
-            model, loader, optimizer, scheduler, scaler, epoch, cfg
-        )
-        
-        # Log
-        print(f"\n[INFO] Epoch {epoch+1} Summary:")
-        print(f"  Total: {avg_total:.4f}")
+        avg_total, avg_losses = train_epoch(model, loader, optimizer, scheduler, scaler, epoch, cfg)
+        print(f"\n[INFO] Epoch {epoch+1} Summary: Total: {avg_total:.4f}")
         for k, v in avg_losses.items():
             print(f"  {k}: {v:.4f}")
-        
         log_data = {'epoch': epoch+1, 'total_loss': avg_total}
         log_data.update(avg_losses)
         log_df = pd.read_csv(log_path)
         log_df = pd.concat([log_df, pd.DataFrame([log_data])], ignore_index=True)
         log_df.to_csv(log_path, index=False)
         
-        # Validation
         if (epoch + 1) % 2 == 0:
             validate(model, val_loader, cfg)
         
-        # Save best
         if avg_total < best_loss - 1e-4:
             best_loss = avg_total
             early_stop_counter = 0
@@ -578,15 +413,13 @@ def main():
             print(f"[INFO] ✅ Best model saved! Loss: {best_loss:.4f}")
         else:
             early_stop_counter += 1
-        
         if early_stop_counter >= cfg.EARLY_STOP_PATIENCE:
             print(f"[INFO] Early stopping at epoch {epoch+1}")
             break
     
-    # Final
     final_path = os.path.join(cfg.SAVE_DIR, f"{cfg.SAVE_NAME}_final.pt")
     torch.save(model.student.state_dict(), final_path)
-    print(f"\n[INFO] ✅ Training done! Best: {best_loss:.4f}")
+    print(f"[INFO] ✅ Training done! Best: {best_loss:.4f}")
 
 if __name__ == "__main__":
     main()
