@@ -127,7 +127,7 @@ class XMLDistillationDataset(Dataset):
 # FUSION MODULE FIX
 # =========================
 class FusionModule(nn.Module):
-    """Concatenate vision+text and project"""
+    """Project concatenated features - compatible with original model.py"""
     def __init__(self, input_dim, hidden_dim):
         super().__init__()
         self.mlp = nn.Sequential(
@@ -136,9 +136,9 @@ class FusionModule(nn.Module):
             nn.Linear(hidden_dim, hidden_dim)
         )
 
-    def forward(self, v_feat, t_feat):
-        x = torch.cat([v_feat, t_feat], dim=-1)
-        return self.mlp(x)
+    def forward(self, fused_feat):
+        """Accept already concatenated features"""
+        return self.mlp(fused_feat)
 
 # =========================
 # DISTILLATION WRAPPER (TEACHER ON CPU)
@@ -204,7 +204,10 @@ class DistillationWrapper(nn.Module):
             input_ids=input_ids, 
             attention_mask=attention_mask
         ).last_hidden_state.mean(1)
-        fusion_student = self.student.fusion(v_student, t_student)
+        
+        # Concatenate for fusion (như trong model.py gốc)
+        fused_student = torch.cat([v_student, t_student], dim=-1)
+        fusion_student = self.student.fusion(fused_student)
 
         # CE loss từ student
         ce_loss, student_logits = self.student(
