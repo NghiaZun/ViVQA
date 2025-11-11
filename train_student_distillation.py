@@ -27,9 +27,9 @@ from model import VQAGenModel
 # =========================
 class Config:
     # Paths
-    TEACHER_DATA = "/kaggle/input/teacher-outputs/teacher_outputs_full.jsonl"
+    TEACHER_DATA = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
     IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-    STUDENT_CKPT = "/kaggle/input/checkpoint/pytorch/default/1/vqa_student_best.pt"  # Pretrained on original data
+    STUDENT_CKPT = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/best_model.pth"  # Pretrained on original data
     TEACHER_MODEL = "Qwen/Qwen2-VL-7B-Instruct"
     
     # Output
