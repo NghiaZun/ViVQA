@@ -156,49 +156,52 @@ if not os.path.exists(log_path):
 ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_token_id)
 
 # =====================
-# TRAIN LOOP
+# TRAIN LOOP (fixed)
 # =====================
 print(f"[INFO] Start training for {EPOCHS} epochs on {device}...")
 model.train()
-
 for epoch in range(EPOCHS):
     total_loss, total_f, total_r, total_a = 0, 0, 0, 0
     progress = tqdm(loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
 
     for batch in progress:
+        # Move tensors to device
         batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
         B = batch_t["pixel_values"].size(0)
 
-        with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
-            # Forward with teacher forcing
-            outputs = model(
+        with torch.amp.autocast(device_type="cuda"):
+            # === Student forward ===
+            logits = model.forward_generate(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["teacher_ids"]
-            )
-            logits = outputs.logits  # (B, L, V)
-            B, L, V = logits.size()
+                attention_mask=batch_t["attention_mask"]
+            )  # logits shape: (B, L, V)
 
-            # Flatten for CE loss
-            logits_flat = logits.view(B*L, V)
-            teacher_flat = batch_t["teacher_ids"].view(B*L)
-            reason_flat = batch_t["reason_ids"].view(B*L)
-            answer_flat = batch_t["answer_ids"].view(B*L)
+            L, V = logits.size(1), logits.size(2)
 
-            # Mask padding
-            mask_teacher = teacher_flat != model.decoder_tokenizer.pad_token_id
-            mask_reason = reason_flat != model.decoder_tokenizer.pad_token_id
-            mask_answer = answer_flat != model.decoder_tokenizer.pad_token_id
+            # === Flatten logits and targets for CE ===
+            logits_flat = logits.view(-1, V)  # (B*L, V)
 
-            # CE Loss
-            loss_format = ce_loss_fn(logits_flat[mask_teacher], teacher_flat[mask_teacher])
-            loss_reason = ce_loss_fn(logits_flat[mask_reason], reason_flat[mask_reason])
-            loss_answer = ce_loss_fn(logits_flat[mask_answer], answer_flat[mask_answer])
-            loss_reason = loss_reason * batch_t["reasoning_weight"].mean()
+            # Pad token in targets = -100 for ignore_index
+            def prepare_target(tensor):
+                pad_id = model.decoder_tokenizer.pad_token_id
+                t = tensor.clone()
+                t[t == pad_id] = -100
+                t = t.view(-1)
+                return t
+
+            teacher_flat = prepare_target(batch_t["teacher_ids"])
+            reason_flat = prepare_target(batch_t["reason_ids"])
+            answer_flat = prepare_target(batch_t["answer_ids"])
+
+            # === Compute 3 losses ===
+            loss_format = ce_loss_fn(logits_flat, teacher_flat)
+            loss_reason = ce_loss_fn(logits_flat, reason_flat) * batch_t["reasoning_weight"].mean()
+            loss_answer = ce_loss_fn(logits_flat, answer_flat)
 
             loss_total = W_FORMAT * loss_format + W_REASON * loss_reason + W_ANSWER * loss_answer
 
+        # === Backprop ===
         scaler.scale(loss_total).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
@@ -206,6 +209,7 @@ for epoch in range(EPOCHS):
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
 
+        # === Logging ===
         total_loss += loss_total.item()
         total_f += loss_format.item()
         total_r += loss_reason.item()
@@ -217,16 +221,16 @@ for epoch in range(EPOCHS):
             "answer": f"{loss_answer.item():.4f}",
         })
 
-    # Average loss
     avg_loss = total_loss / len(loader)
     avg_f = total_f / len(loader)
     avg_r = total_r / len(loader)
     avg_a = total_a / len(loader)
+
     print(f"[INFO] Epoch {epoch+1} | Total: {avg_loss:.4f} | F={avg_f:.4f}, R={avg_r:.4f}, A={avg_a:.4f}")
 
-    # Log
+    # Save log
     df = pd.read_csv(log_path)
-    df.loc[len(df)] = [epoch+1, avg_loss, avg_f, avg_r, avg_a]
+    df.loc[len(df)] = [epoch + 1, avg_loss, avg_f, avg_r, avg_a]
     df.to_csv(log_path, index=False)
 
     # Early stopping
@@ -249,3 +253,4 @@ for epoch in range(EPOCHS):
 # Final save
 torch.save(model.state_dict(), SAVE_PATH)
 print(f"[INFO] ✅ Final fine-tuned model saved → {SAVE_PATH}")
+
