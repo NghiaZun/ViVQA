@@ -10,11 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from PIL import Image
 import pandas as pd
-from transformers import (
-    BlipProcessor,
-    get_cosine_schedule_with_warmup,
-    AutoTokenizer
-)
+from transformers import BlipProcessor, get_cosine_schedule_with_warmup, AutoTokenizer
 from model import VQAGenModel
 
 # =====================
@@ -31,7 +27,7 @@ BATCH_SIZE = 4
 WARMUP_RATIO = 0.06
 EARLY_STOP_PATIENCE = 6
 
-# KD Loss weights (Format + Reason + Answer)
+# KD Loss weights
 W_FORMAT = 0.25
 W_REASON = 0.45
 W_ANSWER = 0.30
@@ -71,28 +67,21 @@ class DistillDataset(Dataset):
 
         pixel_values = self.vision_processor(image, return_tensors="pt").pixel_values[0]
 
-        # =====================
-        # INPUT & TARGET
-        # =====================
+        # Encode question
         q_enc = self.text_tokenizer(q, truncation=True, padding="max_length",
                                     max_length=self.max_q_len, return_tensors="pt")
 
-        # Full teacher output (XML structured)
+        # Encode teacher outputs
         teacher_enc = self.decoder_tokenizer(
-            teacher_raw,
-            truncation=True, padding="max_length",
+            teacher_raw, truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
         )
-
-        # Only answer part (ground truth supervision)
         answer_enc = self.decoder_tokenizer(
             f"<answer>{teacher_answer}</answer>",
             truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
         )
-
-        # Reasoning-only text (for reasoning KD)
-        reasoning_enc = self.decoder_tokenizer(
+        reason_enc = self.decoder_tokenizer(
             f"<reasoning>{teacher_reasoning}</reasoning>",
             truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
@@ -104,7 +93,7 @@ class DistillDataset(Dataset):
             "attention_mask": q_enc.attention_mask[0],
             "teacher_ids": teacher_enc.input_ids[0],
             "answer_ids": answer_enc.input_ids[0],
-            "reason_ids": reasoning_enc.input_ids[0],
+            "reason_ids": reason_enc.input_ids[0],
             "reasoning_weight": torch.tensor(reasoning_weight, dtype=torch.float)
         }
 
@@ -118,11 +107,13 @@ model = VQAGenModel(
     vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 )
 
+# Optional KD checkpoint
 KD_CHECKPOINT = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/best_model.pth"
 if os.path.exists(KD_CHECKPOINT):
     print(f"[INFO] Loading KD checkpoint from {KD_CHECKPOINT}")
     model.load_state_dict(torch.load(KD_CHECKPOINT, map_location=device))
 
+# Ensure tokenizers
 phobert_tok_path = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer"
 vit5_tok_path = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 if os.path.exists(phobert_tok_path):
@@ -159,68 +150,55 @@ scaler = torch.cuda.amp.GradScaler()
 best_loss = float("inf")
 early_stop_counter = 0
 log_path = os.path.join(SAVE_DIR, "train_log_multiKD.csv")
-
 if not os.path.exists(log_path):
     pd.DataFrame(columns=["epoch", "total_loss", "format", "reason", "answer"]).to_csv(log_path, index=False)
 
-ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
+ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_token_id)
 
 # =====================
-# TRAIN LOOP (Fixed Multi-Objective KD)
+# TRAIN LOOP
 # =====================
 print(f"[INFO] Start training for {EPOCHS} epochs on {device}...")
 model.train()
-
-ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
 
 for epoch in range(EPOCHS):
     total_loss, total_f, total_r, total_a = 0, 0, 0, 0
     progress = tqdm(loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
 
     for batch in progress:
-        # Move tensors to device
         batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-
         B = batch_t["pixel_values"].size(0)
-        max_len = batch_t["teacher_ids"].size(1)  # sequence length
 
         with torch.amp.autocast(device_type='cuda', dtype=torch.float16):
-            # Forward generate logits (B,L,V)
-            logits = model.forward_generate(
+            # Forward with teacher forcing
+            outputs = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
-                max_length=max_len
-            )  # shape (B,L,V)
+                labels=batch_t["teacher_ids"]
+            )
+            logits = outputs.logits  # (B, L, V)
+            B, L, V = logits.size()
 
-            V = logits.size(-1)
-            L = logits.size(1)
-
-            # Flatten for CrossEntropy
+            # Flatten for CE loss
             logits_flat = logits.view(B*L, V)
             teacher_flat = batch_t["teacher_ids"].view(B*L)
             reason_flat = batch_t["reason_ids"].view(B*L)
             answer_flat = batch_t["answer_ids"].view(B*L)
 
-            ignore_id = model.decoder_tokenizer.pad_token_id
+            # Mask padding
+            mask_teacher = teacher_flat != model.decoder_tokenizer.pad_token_id
+            mask_reason = reason_flat != model.decoder_tokenizer.pad_token_id
+            mask_answer = answer_flat != model.decoder_tokenizer.pad_token_id
 
-            # Mask pad tokens
-            mask_teacher = teacher_flat != ignore_id
-            mask_reason = reason_flat != ignore_id
-            mask_answer = answer_flat != ignore_id
-
-            # Compute CE losses
+            # CE Loss
             loss_format = ce_loss_fn(logits_flat[mask_teacher], teacher_flat[mask_teacher])
             loss_reason = ce_loss_fn(logits_flat[mask_reason], reason_flat[mask_reason])
             loss_answer = ce_loss_fn(logits_flat[mask_answer], answer_flat[mask_answer])
-
-            # Apply reasoning weight (difficulty)
             loss_reason = loss_reason * batch_t["reasoning_weight"].mean()
 
-            # Weighted sum
             loss_total = W_FORMAT * loss_format + W_REASON * loss_reason + W_ANSWER * loss_answer
 
-        # Backprop
         scaler.scale(loss_total).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
@@ -228,7 +206,6 @@ for epoch in range(EPOCHS):
         optimizer.zero_grad(set_to_none=True)
         scheduler.step()
 
-        # Logging
         total_loss += loss_total.item()
         total_f += loss_format.item()
         total_r += loss_reason.item()
@@ -240,19 +217,19 @@ for epoch in range(EPOCHS):
             "answer": f"{loss_answer.item():.4f}",
         })
 
-    # Average losses
+    # Average loss
     avg_loss = total_loss / len(loader)
     avg_f = total_f / len(loader)
     avg_r = total_r / len(loader)
     avg_a = total_a / len(loader)
     print(f"[INFO] Epoch {epoch+1} | Total: {avg_loss:.4f} | F={avg_f:.4f}, R={avg_r:.4f}, A={avg_a:.4f}")
 
-    # Save log
+    # Log
     df = pd.read_csv(log_path)
     df.loc[len(df)] = [epoch+1, avg_loss, avg_f, avg_r, avg_a]
     df.to_csv(log_path, index=False)
 
-    # Early stopping & best model
+    # Early stopping
     if avg_loss < best_loss - 1e-4:
         best_loss = avg_loss
         early_stop_counter = 0
@@ -272,4 +249,3 @@ for epoch in range(EPOCHS):
 # Final save
 torch.save(model.state_dict(), SAVE_PATH)
 print(f"[INFO] ✅ Final fine-tuned model saved → {SAVE_PATH}")
-
