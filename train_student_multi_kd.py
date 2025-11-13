@@ -166,7 +166,7 @@ if not os.path.exists(log_path):
 ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=-100)
 
 # =====================
-# TRAIN LOOP
+# TRAIN LOOP FIXED
 # =====================
 print(f"[INFO] Start training for {EPOCHS} epochs on {device}...")
 model.train()
@@ -176,27 +176,39 @@ for epoch in range(EPOCHS):
 
     for batch in progress:
         batch = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-        with torch.cuda.amp.autocast():
-            # === Student forward (generate logits)
+
+        with torch.amp.autocast(device_type='cuda'):
+            # Forward pass
             logits = model.forward_generate(
                 pixel_values=batch["pixel_values"],
                 input_ids=batch["input_ids"],
-                attention_mask=batch["attention_mask"]
+                attention_mask=batch["attention_mask"],
+                max_length=batch["teacher_ids"].size(1)  # ensure same seq length
             )
 
-            # logits shape: (B, L, V)
-            # Align shapes for CE
+            # Flatten logits: (B*L, V)
             logits_flat = logits.view(-1, logits.size(-1))
 
-            # === Compute 3 types of loss ===
-            loss_format = ce_loss_fn(logits_flat, batch["teacher_ids"].view(-1))
-            loss_reason = ce_loss_fn(logits_flat, batch["reason_ids"].view(-1))
-            loss_answer = ce_loss_fn(logits_flat, batch["answer_ids"].view(-1))
+            # Flatten targets
+            teacher_flat = batch["teacher_ids"].view(-1)
+            reason_flat = batch["reason_ids"].view(-1)
+            answer_flat = batch["answer_ids"].view(-1)
 
-            # Apply reasoning weight (difficulty scaling)
+            # Mask padding tokens (-100 or pad_token_id)
+            ignore_id = model.decoder_tokenizer.pad_token_id
+            teacher_mask = teacher_flat != ignore_id
+            reason_mask = reason_flat != ignore_id
+            answer_mask = answer_flat != ignore_id
+
+            # Compute CE loss
+            loss_format = ce_loss_fn(logits_flat[teacher_mask], teacher_flat[teacher_mask])
+            loss_reason = ce_loss_fn(logits_flat[reason_mask], reason_flat[reason_mask])
+            loss_answer = ce_loss_fn(logits_flat[answer_mask], answer_flat[answer_mask])
+
+            # Apply reasoning weight
             loss_reason = loss_reason * batch["reasoning_weight"].mean()
 
-            # Weighted sum (7:3 ratio)
+            # Weighted sum
             loss_total = W_FORMAT * loss_format + W_REASON * loss_reason + W_ANSWER * loss_answer
 
         scaler.scale(loss_total).backward()
@@ -217,6 +229,7 @@ for epoch in range(EPOCHS):
             "answer": f"{loss_answer.item():.4f}",
         })
 
+    # Avg loss
     avg_loss = total_loss / len(loader)
     avg_f = total_f / len(loader)
     avg_r = total_r / len(loader)
@@ -224,11 +237,12 @@ for epoch in range(EPOCHS):
 
     print(f"[INFO] Epoch {epoch+1} | Total: {avg_loss:.4f} | F={avg_f:.4f}, R={avg_r:.4f}, A={avg_a:.4f}")
 
+    # Save log
     df = pd.read_csv(log_path)
     df.loc[len(df)] = [epoch + 1, avg_loss, avg_f, avg_r, avg_a]
     df.to_csv(log_path, index=False)
 
-    # Early stopping logic
+    # Early stopping
     if avg_loss < best_loss - 1e-4:
         best_loss = avg_loss
         early_stop_counter = 0
@@ -244,6 +258,7 @@ for epoch in range(EPOCHS):
     if early_stop_counter >= EARLY_STOP_PATIENCE:
         print("[INFO] Early stopping triggered.")
         break
+
 
 # =====================
 # FINAL SAVE
