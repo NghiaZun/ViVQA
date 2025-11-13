@@ -135,30 +135,30 @@ class VQAGenModel(nn.Module):
         )
         
     def forward_generate(self, pixel_values, input_ids, attention_mask=None, max_length=32):
-    # Encode image & text
-    vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
-    text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-    text_feats = text_out[:, 0, :]
-
-    fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
-    fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
-
-    encoder = self.decoder.get_encoder()
-    encoder_outputs = encoder(inputs_embeds=fused, attention_mask=fusion_mask)
-
-    decoder_input_ids = torch.full(
-        (pixel_values.size(0), 1),
-        self.decoder_tokenizer.pad_token_id,
-        dtype=torch.long,
-        device=pixel_values.device
-    )
-
-    outputs = self.decoder(
-        encoder_outputs=encoder_outputs,
-        attention_mask=fusion_mask,
-        decoder_input_ids=decoder_input_ids,
-        output_hidden_states=True,
-        return_dict=True
-    )
-    return outputs.logits
+        # Encode image & text
+        vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
+        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        text_feats = text_out[:, 0, :]
+    
+        fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
+        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
+    
+        encoder = self.decoder.get_encoder()
+        encoder_outputs = encoder(inputs_embeds=fused, attention_mask=fusion_mask)
+    
+        decoder_input_ids = torch.full(
+            (pixel_values.size(0), 1),
+            self.decoder_tokenizer.pad_token_id,
+            dtype=torch.long,
+            device=pixel_values.device
+        )
+    
+        outputs = self.decoder(
+            encoder_outputs=encoder_outputs,
+            attention_mask=fusion_mask,
+            decoder_input_ids=decoder_input_ids,
+            output_hidden_states=True,
+            return_dict=True
+        )
+        return outputs.logits
 
