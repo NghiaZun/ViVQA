@@ -16,7 +16,7 @@ from model import VQAGenModel
 # =====================
 # CONFIG
 # =====================
-DATA_PATH = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
+DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 SAVE_DIR = "/kaggle/working"
 SAVE_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
@@ -103,19 +103,19 @@ class DistillDataset(Dataset):
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 )
 
 # Optional KD checkpoint
-KD_CHECKPOINT = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/best_model.pth"
+KD_CHECKPOINT = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/best_model.pth"
 if os.path.exists(KD_CHECKPOINT):
     print(f"[INFO] Loading KD checkpoint from {KD_CHECKPOINT}")
     model.load_state_dict(torch.load(KD_CHECKPOINT, map_location=device))
 
 # Ensure tokenizers
-phobert_tok_path = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer"
-vit5_tok_path = "/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+phobert_tok_path = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer"
+vit5_tok_path = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 if os.path.exists(phobert_tok_path):
     model.text_tokenizer = AutoTokenizer.from_pretrained(phobert_tok_path)
 if os.path.exists(vit5_tok_path):
