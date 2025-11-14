@@ -1,6 +1,6 @@
 """
-Day 4 – Full Student Fine-tuning (Multi-Objective KD)
-Author: Hân (updated by ChatGPT)
+Full Student Fine-tuning (Multi-Objective KD) with RESUME + VALIDATION
+Author: Updated by ChatGPT
 """
 
 import os
@@ -10,7 +10,7 @@ from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 from PIL import Image
 import pandas as pd
-from transformers import BlipProcessor, get_cosine_schedule_with_warmup, AutoTokenizer
+from transformers import BlipProcessor, AutoTokenizer
 from model import VQAGenModel
 
 # =====================
@@ -19,7 +19,10 @@ from model import VQAGenModel
 DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 SAVE_DIR = "/kaggle/working"
-SAVE_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
+
+BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
+FINAL_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
+RESUME_PATH = os.path.join(SAVE_DIR, "resume_state.pth")
 
 EPOCHS = 60
 LR = 1e-5
@@ -40,13 +43,18 @@ os.makedirs(SAVE_DIR, exist_ok=True)
 # =====================
 class DistillDataset(Dataset):
     def __init__(self, jsonl_path, vision_processor, text_tokenizer, decoder_tokenizer,
-                 max_q_len=64, max_a_len=128):
+                 max_q_len=64, max_a_len=128, val_split=0.1):
         self.samples = [json.loads(line) for line in open(jsonl_path, "r", encoding="utf-8")]
         self.vision_processor = vision_processor
         self.text_tokenizer = text_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
         self.max_q_len = max_q_len
         self.max_a_len = max_a_len
+
+        # Split train/val
+        n_val = int(len(self.samples) * val_split)
+        self.train_samples = self.samples[n_val:]
+        self.val_samples = self.samples[:n_val]
 
     def __len__(self):
         return len(self.samples)
@@ -67,23 +75,18 @@ class DistillDataset(Dataset):
 
         pixel_values = self.vision_processor(image, return_tensors="pt").pixel_values[0]
 
-        # Encode question
         q_enc = self.text_tokenizer(q, truncation=True, padding="max_length",
                                     max_length=self.max_q_len, return_tensors="pt")
-
-        # Encode teacher outputs
         teacher_enc = self.decoder_tokenizer(
             teacher_raw, truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
         )
         answer_enc = self.decoder_tokenizer(
-            f"<answer>{teacher_answer}</answer>",
-            truncation=True, padding="max_length",
+            f"<answer>{teacher_answer}</answer>", truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
         )
         reason_enc = self.decoder_tokenizer(
-            f"<reasoning>{teacher_reasoning}</reasoning>",
-            truncation=True, padding="max_length",
+            f"<reasoning>{teacher_reasoning}</reasoning>", truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
         )
 
@@ -105,154 +108,166 @@ model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
     phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
     vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
-)
+).to(device)
 
-# Optional KD checkpoint
-KD_CHECKPOINT = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/best_model.pth"
-if os.path.exists(KD_CHECKPOINT):
-    print(f"[INFO] Loading KD checkpoint from {KD_CHECKPOINT}")
-    model.load_state_dict(torch.load(KD_CHECKPOINT, map_location=device))
-
-# Ensure tokenizers
-phobert_tok_path = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer"
-vit5_tok_path = "/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
-if os.path.exists(phobert_tok_path):
-    model.text_tokenizer = AutoTokenizer.from_pretrained(phobert_tok_path)
-if os.path.exists(vit5_tok_path):
-    model.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_tok_path)
-
-model.to(device)
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
 # =====================
-# DATA LOADER
+# DATA LOADERS
 # =====================
-dataset = DistillDataset(
-    jsonl_path=DATA_PATH,
-    vision_processor=vision_processor,
-    text_tokenizer=model.text_tokenizer,
-    decoder_tokenizer=model.decoder_tokenizer
-)
-loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+dataset = DistillDataset(DATA_PATH, vision_processor, model.text_tokenizer, model.decoder_tokenizer)
+train_loader = DataLoader(dataset.train_samples, batch_size=BATCH_SIZE, shuffle=True, num_workers=2)
+val_loader = DataLoader(dataset.val_samples, batch_size=BATCH_SIZE, shuffle=False, num_workers=2)
 
 # =====================
 # TRAIN SETUP
 # =====================
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-num_training_steps = len(loader) * EPOCHS
-scheduler = get_cosine_schedule_with_warmup(
-    optimizer,
-    num_warmup_steps=int(WARMUP_RATIO * num_training_steps),
-    num_training_steps=num_training_steps
-)
-
+ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_token_id)
 scaler = torch.cuda.amp.GradScaler()
 best_loss = float("inf")
 early_stop_counter = 0
-log_path = os.path.join(SAVE_DIR, "train_log_multiKD.csv")
-if not os.path.exists(log_path):
-    pd.DataFrame(columns=["epoch", "total_loss", "format", "reason", "answer"]).to_csv(log_path, index=False)
+start_epoch = 0
 
-ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_token_id)
+# Scheduler: Reduce LR on plateau
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min", factor=0.5, patience=2, verbose=True)
+
+# ---------------------
+# RESUME CHECKPOINT
+# ---------------------
+if os.path.exists(RESUME_PATH):
+    print("[INFO] Resume training from previous checkpoint...")
+    ckpt = torch.load(RESUME_PATH, map_location=device)
+    model.load_state_dict(ckpt["model"])
+    optimizer.load_state_dict(ckpt["optimizer"])
+    scheduler.load_state_dict(ckpt["scheduler"])
+    scaler.load_state_dict(ckpt["scaler"])
+    start_epoch = ckpt["epoch"] + 1
+    best_loss = ckpt["best_loss"]
+    early_stop_counter = ckpt["early_stop_counter"]
+    print(f"[INFO] Resumed at epoch {start_epoch}")
 
 # =====================
-# TRAIN LOOP – Multi-KD with teacher forcing
+# TRAIN LOOP
 # =====================
-print(f"[INFO] Start training for {EPOCHS} epochs on {device}...")
-model.train()
+print("[INFO] Start training...")
 
-ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_token_id)
-
-for epoch in range(EPOCHS):
-    total_loss, total_f, total_r, total_a = 0, 0, 0, 0
-    progress = tqdm(loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
+for epoch in range(start_epoch, EPOCHS):
+    model.train()
+    total_loss = total_f = total_r = total_a = 0
+    progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}")
 
     for batch in progress:
-        # move tensors to device
         batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
 
         with torch.cuda.amp.autocast():
-            # === Student forward with labels (teacher forcing) ===
-            # Full teacher output
-            ce_loss_full, logits_full = model(
+            ce_loss_full, _ = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
             )
-            # Reasoning only
-            ce_loss_reason, logits_reason = model(
+            ce_loss_reason, _ = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["reason_ids"]
             )
-            # Answer only
-            ce_loss_answer, logits_answer = model(
+            ce_loss_reason *= batch_t["reasoning_weight"].mean()
+            ce_loss_answer, _ = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["answer_ids"]
             )
-
-            # Apply reasoning weight
-            ce_loss_reason = ce_loss_reason * batch_t["reasoning_weight"].mean()
-
-            # Weighted sum
             loss_total = W_FORMAT * ce_loss_full + W_REASON * ce_loss_reason + W_ANSWER * ce_loss_answer
 
-        # Backward
         scaler.scale(loss_total).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
         optimizer.zero_grad(set_to_none=True)
-        scheduler.step()
 
-        # Logging
         total_loss += loss_total.item()
         total_f += ce_loss_full.item()
         total_r += ce_loss_reason.item()
         total_a += ce_loss_answer.item()
-        progress.set_postfix({
-            "total": f"{loss_total.item():.4f}",
-            "format": f"{ce_loss_full.item():.4f}",
-            "reason": f"{ce_loss_reason.item():.4f}",
-            "answer": f"{ce_loss_answer.item():.4f}",
-        })
 
-    # Epoch averages
-    avg_loss = total_loss / len(loader)
-    avg_f = total_f / len(loader)
-    avg_r = total_r / len(loader)
-    avg_a = total_a / len(loader)
-    print(f"[INFO] Epoch {epoch+1} | Total: {avg_loss:.4f} | F={avg_f:.4f}, R={avg_r:.4f}, A={avg_a:.4f}")
+    avg_train_loss = total_loss / len(train_loader)
+    avg_f = total_f / len(train_loader)
+    avg_r = total_r / len(train_loader)
+    avg_a = total_a / len(train_loader)
 
-    # Save logs
-    df = pd.read_csv(log_path)
-    df.loc[len(df)] = [epoch + 1, avg_loss, avg_f, avg_r, avg_a]
-    df.to_csv(log_path, index=False)
+    # ----------- VALIDATION -----------
+    model.eval()
+    val_loss = val_f = val_r = val_a = 0
+    with torch.no_grad():
+        for batch in val_loader:
+            batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
+            ce_loss_full, _ = model(
+                pixel_values=batch_t["pixel_values"],
+                input_ids=batch_t["input_ids"],
+                attention_mask=batch_t["attention_mask"],
+                labels=batch_t["teacher_ids"]
+            )
+            ce_loss_reason, _ = model(
+                pixel_values=batch_t["pixel_values"],
+                input_ids=batch_t["input_ids"],
+                attention_mask=batch_t["attention_mask"],
+                labels=batch_t["reason_ids"]
+            )
+            ce_loss_reason *= batch_t["reasoning_weight"].mean()
+            ce_loss_answer, _ = model(
+                pixel_values=batch_t["pixel_values"],
+                input_ids=batch_t["input_ids"],
+                attention_mask=batch_t["attention_mask"],
+                labels=batch_t["answer_ids"]
+            )
+            loss_val = W_FORMAT * ce_loss_full + W_REASON * ce_loss_reason + W_ANSWER * ce_loss_answer
+            val_loss += loss_val.item()
+            val_f += ce_loss_full.item()
+            val_r += ce_loss_reason.item()
+            val_a += ce_loss_answer.item()
 
-    # Early stopping
-    if avg_loss < best_loss - 1e-4:
-        best_loss = avg_loss
+    avg_val_loss = val_loss / len(val_loader)
+    avg_val_f = val_f / len(val_loader)
+    avg_val_r = val_r / len(val_loader)
+    avg_val_a = val_a / len(val_loader)
+
+    print(f"[INFO] Epoch {epoch+1} | Train Loss: {avg_train_loss:.4f} | Val Loss: {avg_val_loss:.4f} "
+          f"| F={avg_val_f:.4f}, R={avg_val_r:.4f}, A={avg_val_a:.4f}")
+
+    # Scheduler step
+    scheduler.step(avg_val_loss)
+
+    # Save resume state
+    resume_state = {
+        "epoch": epoch,
+        "model": model.state_dict(),
+        "optimizer": optimizer.state_dict(),
+        "scheduler": scheduler.state_dict(),
+        "scaler": scaler.state_dict(),
+        "best_loss": best_loss,
+        "early_stop_counter": early_stop_counter
+    }
+    torch.save(resume_state, RESUME_PATH)
+
+    # Save best model
+    if avg_val_loss < best_loss - 1e-4:
+        best_loss = avg_val_loss
         early_stop_counter = 0
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt"))
-        print(f"[INFO] ✅ New best model saved at epoch {epoch+1} (loss={best_loss:.4f})")
+        torch.save(model.state_dict(), BEST_MODEL_PATH)
+        print(f"[INFO] ⭐ New BEST model saved at epoch {epoch+1}")
     else:
         early_stop_counter += 1
         print(f"[INFO] No improvement ({early_stop_counter}/{EARLY_STOP_PATIENCE})")
 
-    if (epoch + 1) % 5 == 0:
-        torch.save(model.state_dict(), os.path.join(SAVE_DIR, f"vqa_student_epoch{epoch+1}.pt"))
-
     if early_stop_counter >= EARLY_STOP_PATIENCE:
-        print("[INFO] Early stopping triggered.")
+        print("[INFO] EARLY STOPPING TRIGGERED.")
         break
 
 # =====================
-# FINAL SAVE
+# SAVE FINAL
 # =====================
-torch.save(model.state_dict(), SAVE_PATH)
-print(f"[INFO] ✅ Final fine-tuned model saved → {SAVE_PATH}")
-
+torch.save(model.state_dict(), FINAL_MODEL_PATH)
+print("[INFO] Training finished. Final model saved.")
