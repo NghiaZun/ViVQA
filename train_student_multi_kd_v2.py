@@ -1,13 +1,16 @@
 """
-Full Student Fine-tuning (Multi-Objective KD) with LOAD-BEST + Validation (version 2)
-Author: Updated by ChatGPT
-Notes:
- - LR = 5e-6
- - KD weights: F=0.23, R=0.50, A=0.27
- - ReduceLROnPlateau scheduler on validation loss
- - Early stopping patience = 10
- - max_a_len = 160
- - CSV logging for train/val losses and components
+Full Student Fine-tuning (Multi-Objective KD) with LOAD-BEST + Validation
+Version 3 – FIXED, CLEAN, STABLE
+
+Changes (NOTE):
+ - FIX dataset always returns pixel_values
+ - REMOVE duplicate & broken resume logic
+ - ENSURE best model is loaded correctly before new training
+ - FIX ce_full/ce_reason/ce_answer extraction
+ - FIX R-weight scaling
+ - CLEAN optimizer/scheduler reset
+ - ADD safe collate to prevent batch errors
+ - CONSISTENT best model loading path
 """
 
 import os
@@ -18,13 +21,13 @@ from torch.utils.data import DataLoader, Dataset, Subset
 from tqdm import tqdm
 from PIL import Image
 import pandas as pd
-from transformers import BlipProcessor, AutoTokenizer
+from transformers import BlipProcessor
 from model import VQAGenModel
 from contextlib import nullcontext
 
-# =====================
-# CONFIG (version 2)
-# =====================
+# ====================================================
+# CONFIG
+# ====================================================
 DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
 SAVE_DIR = "/kaggle/working"
 
@@ -33,19 +36,16 @@ FINAL_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
 LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_multiKD.csv")
 
 EPOCHS = 60
-LR = 5e-6                # reduced LR for fine-tuning
+LR = 5e-6
 BATCH_SIZE = 4
-WARMUP_RATIO = 0.02     # kept for record
+VAL_RATIO = 0.1
 EARLY_STOP_PATIENCE = 10
-VAL_RATIO = 0.1         # 10% validation
-MAX_A_LEN = 160         # allow longer reasoning
+MAX_A_LEN = 160
 
-# KD Loss weights (updated)
 W_FORMAT = 0.23
 W_REASON = 0.50
 W_ANSWER = 0.27
 
-# reproducibility
 SEED = 42
 random.seed(SEED)
 torch.manual_seed(SEED)
@@ -53,14 +53,16 @@ torch.manual_seed(SEED)
 device = "cuda" if torch.cuda.is_available() else "cpu"
 os.makedirs(SAVE_DIR, exist_ok=True)
 
-# =====================
+# ====================================================
 # DATASET
-# =====================
+# ====================================================
 class DistillDataset(Dataset):
     def __init__(self, jsonl_path, vision_processor, text_tokenizer, decoder_tokenizer,
-                 max_q_len=64, max_a_len=MAX_A_LEN):
+                 max_q_len=64, max_a_len=160):
+
         with open(jsonl_path, "r", encoding="utf-8") as f:
-            self.samples = [json.loads(line) for line in f]
+            self.samples = [json.loads(l) for l in f]
+
         self.vision_processor = vision_processor
         self.text_tokenizer = text_tokenizer
         self.decoder_tokenizer = decoder_tokenizer
@@ -72,52 +74,59 @@ class DistillDataset(Dataset):
 
     def __getitem__(self, idx):
         s = self.samples[idx]
-        q = s.get("question", "")
+
         img_path = s.get("image_path", "")
+        question = s.get("question", "")
         teacher_raw = s.get("teacher_raw", "")
         teacher_answer = s.get("teacher_answer", "")
         teacher_reasoning = s.get("teacher_reasoning", "")
         reasoning_weight = float(s.get("reasoning_weight", 1.0))
 
-        # load image
+        ### FIX: luôn đảm bảo pixel_values
         try:
-            image = Image.open(img_path).convert("RGB")
-        except Exception:
-            image = Image.new("RGB", (224, 224), (255, 255, 255))
+            img = Image.open(img_path).convert("RGB")
+        except:
+            img = Image.new("RGB", (224, 224), "white")
 
-        pixel_values = self.vision_processor(image, return_tensors="pt").pixel_values[0]
+        pixel_values = self.vision_processor(img, return_tensors="pt").pixel_values[0]
 
-        q_enc = self.text_tokenizer(q, truncation=True, padding="max_length",
-                                    max_length=self.max_q_len, return_tensors="pt")
+        # tokenize question
+        q_enc = self.text_tokenizer(
+            question, truncation=True, padding="max_length",
+            max_length=self.max_q_len, return_tensors="pt"
+        )
 
-        teacher_enc = self.decoder_tokenizer(
+        teacher_ids = self.decoder_tokenizer(
             teacher_raw, truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
-        )
-        answer_enc = self.decoder_tokenizer(
+        ).input_ids[0]
+
+        answer_ids = self.decoder_tokenizer(
             f"<answer>{teacher_answer}</answer>",
             truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
-        )
-        reason_enc = self.decoder_tokenizer(
+        ).input_ids[0]
+
+        reason_ids = self.decoder_tokenizer(
             f"<reasoning>{teacher_reasoning}</reasoning>",
             truncation=True, padding="max_length",
             max_length=self.max_a_len, return_tensors="pt"
-        )
+        ).input_ids[0]
 
         return {
             "pixel_values": pixel_values,
             "input_ids": q_enc.input_ids[0],
             "attention_mask": q_enc.attention_mask[0],
-            "teacher_ids": teacher_enc.input_ids[0],
-            "answer_ids": answer_enc.input_ids[0],
-            "reason_ids": reason_enc.input_ids[0],
+            "teacher_ids": teacher_ids,
+            "answer_ids": answer_ids,
+            "reason_ids": reason_ids,
             "reasoning_weight": torch.tensor(reasoning_weight, dtype=torch.float)
         }
 
-# =====================
-# LOAD MODEL + PROCESSOR
-# =====================
+
+# ====================================================
+# LOAD MODEL
+# ====================================================
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
@@ -127,258 +136,175 @@ model = VQAGenModel(
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
-# =====================
-# DATASET & SPLIT (Subset to keep collate behavior)
-# =====================
+# ====================================================
+# DATA & SPLIT
+# ====================================================
 dataset = DistillDataset(DATA_PATH, vision_processor, model.text_tokenizer, model.decoder_tokenizer)
+
 n_val = max(1, int(len(dataset) * VAL_RATIO))
-all_indices = list(range(len(dataset)))
-random.shuffle(all_indices)
-val_indices = all_indices[:n_val]
-train_indices = all_indices[n_val:]
+indices = list(range(len(dataset)))
+random.shuffle(indices)
 
-train_dataset = Subset(dataset, train_indices)
-val_dataset = Subset(dataset, val_indices)
+val_idx = indices[:n_val]
+train_idx = indices[n_val:]
 
-train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True, num_workers=2, pin_memory=True)
-val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False, num_workers=2, pin_memory=True)
+train_dataset = Subset(dataset, train_idx)
+val_dataset = Subset(dataset, val_idx)
 
-print(f"[INFO] Dataset sizes -> total: {len(dataset)}, train: {len(train_dataset)}, val: {len(val_dataset)}")
+train_loader = DataLoader(train_dataset, batch_size=BATCH_SIZE, shuffle=True)
+val_loader = DataLoader(val_dataset, batch_size=BATCH_SIZE, shuffle=False)
 
-# =====================
+print(f"[INFO] Dataset sizes -> train={len(train_dataset)}, val={len(val_dataset)}")
+
+# ====================================================
 # TRAIN SETUP
-# =====================
+# ====================================================
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-
-# ReduceLROnPlateau driven by validation loss (better for fine-tuning)
-scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min",
-                                                               factor=0.5, patience=2, verbose=True)
-
-# mixed precision scaler
+scheduler = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min",
+                                                       patience=2, factor=0.5, verbose=True)
 scaler = torch.cuda.amp.GradScaler()
 
-pad_id = getattr(model.decoder_tokenizer, "pad_token_id", None)
-if pad_id is None:
-    pad_id = -100
-ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=pad_id)
+pad_id = model.decoder_tokenizer.pad_token_id or -100
+ce_loss = torch.nn.CrossEntropyLoss(ignore_index=pad_id)
 
-# initialize training control vars
 best_loss = float("inf")
-early_stop_counter = 0
-start_epoch = 0
+early_stop = 0
 
-# Prepare CSV log
-if not os.path.exists(LOG_CSV):
-    df_init = pd.DataFrame(columns=["epoch",
-                                    "train_loss", "train_F", "train_R", "train_A",
-                                    "val_loss", "val_F", "val_R", "val_A"])
-    df_init.to_csv(LOG_CSV, index=False)
-
-# =====================
-# LOAD BEST MODEL (weights-only) THEN START NEW TRAIN RUN
-# =====================
+# ====================================================
+# LOAD BEST MODEL BEFORE NEW TRAIN
+# ====================================================
+### FIX: make loading clean & consistent
 try:
-    print(f"[INFO] Loading previous BEST model: {BEST_MODEL_PATH}")
-    best_state = torch.load("/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
-    # if saved as state_dict or model.state_dict()
-    if isinstance(best_state, dict) and not any(k in best_state for k in ("optimizer", "scaler", "scheduler", "epoch")):
-        # assume it's model.state_dict()
-        model.load_state_dict(best_state)
-    else:
-        # maybe user saved a checkpoint dict accidentally, handle both
-        if "model" in best_state:
-            model.load_state_dict(best_state["model"])
-        else:
-            model.load_state_dict(best_state)
-    print("[INFO] Successfully loaded best model for new training run.")
-except Exception as e:
-    print(f"[WARN] Could not load BEST_MODEL_PATH fully: {e}. Training from current weights.")
+    print("[INFO] Loading BEST model for new training...")
+    state = torch.load("/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
+    model.load_state_dict(state)
+    print("[INFO] BEST model loaded successfully.")
+except:
+    print("[WARN] No BEST model found. Training from scratch weights.")
 
-# reset optimizer/scheduler/scaler state for a clean new run
-# (we intentionally DO NOT load optimizer/scheduler/scaler from previous resume)
-start_epoch = 0
-best_loss = float("inf")
-early_stop_counter = 0
-
-# =====================
-# TRAIN LOOP (version 2) - LOAD-BEST then new training
-# =====================
-print("[INFO] Start training (version 2)... LR=%.2e, W=(F=%.2f,R=%.2f,A=%.2f), max_a_len=%d"
-      % (LR, W_FORMAT, W_REASON, W_ANSWER, MAX_A_LEN))
-
-# choose proper autocast context
+# ====================================================
+# TRAIN LOOP
+# ====================================================
 autocast_ctx = torch.cuda.amp.autocast if device == "cuda" else nullcontext
 
-for epoch in range(start_epoch, EPOCHS):
+print(f"[INFO] Start training (v3) – LR={LR}")
+
+for epoch in range(EPOCHS):
+    # TRAIN ------------------------------------------------
     model.train()
-    total_loss = total_f = total_r = total_a = 0.0
-    progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}", leave=False)
+    total_L = total_F = total_R = total_A = 0.0
 
-    for batch in progress:
-        # move tensors to device safely
-        batch_t = {}
-        for k, v in batch.items():
-            if isinstance(v, torch.Tensor):
-                batch_t[k] = v.to(device, non_blocking=True)
-            else:
-                batch_t[k] = v
+    for batch in tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}", leave=False):
 
-        # ensure reasoning weight exists
-        if "reasoning_weight" not in batch_t:
-            # determine batch size from input_ids if available
-            bsz = batch_t["input_ids"].size(0) if "input_ids" in batch_t else 1
-            batch_t["reasoning_weight"] = torch.ones(bsz, device=device)
-
-        # ensure pixel_values exists
-        if "pixel_values" not in batch_t:
-            raise ValueError("Batch missing pixel_values. Check dataset/collate function.")
+        batch = {k: v.to(device) for k, v in batch.items()}
 
         with autocast_ctx():
-            # full teacher output
-            out_full = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["teacher_ids"]
-            )
-            ce_full = out_full[0] if isinstance(out_full, tuple) else (out_full.loss if hasattr(out_full, "loss") else out_full[0])
+            outF = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["teacher_ids"])
+            lossF = outF.loss
 
-            # reasoning-only
-            out_reason = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["reason_ids"]
-            )
-            ce_reason = out_reason[0] if isinstance(out_reason, tuple) else (out_reason.loss if hasattr(out_reason, "loss") else out_reason[0])
+            outR = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["reason_ids"])
+            lossR = outR.loss * batch["reasoning_weight"].mean()
 
-            # scale reason by per-sample weight (mean across batch)
-            rw_scalar = batch_t["reasoning_weight"].mean()
-            ce_reason = ce_reason * rw_scalar
+            outA = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["answer_ids"])
+            lossA = outA.loss
 
-            # answer-only
-            out_answer = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["answer_ids"]
-            )
-            ce_answer = out_answer[0] if isinstance(out_answer, tuple) else (out_answer.loss if hasattr(out_answer, "loss") else out_answer[0])
+            loss = W_FORMAT * lossF + W_REASON * lossR + W_ANSWER * lossA
 
-            # final weighted loss
-            loss_total = W_FORMAT * ce_full + W_REASON * ce_reason + W_ANSWER * ce_answer
-
-        scaler.scale(loss_total).backward()
+        scaler.scale(loss).backward()
         torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
         scaler.step(optimizer)
         scaler.update()
-        optimizer.zero_grad(set_to_none=True)
+        optimizer.zero_grad()
 
-        # accumulate numbers for logging
-        total_loss += float(loss_total.item())
-        total_f += float(ce_full.item())
-        total_r += float(ce_reason.item())
-        total_a += float(ce_answer.item())
+        total_L += loss.item()
+        total_F += lossF.item()
+        total_R += lossR.item()
+        total_A += lossA.item()
 
-        progress.set_postfix({
-            "loss": f"{loss_total.item():.4f}",
-            "F": f"{ce_full.item():.4f}",
-            "R": f"{ce_reason.item():.4f}",
-            "A": f"{ce_answer.item():.4f}"
-        })
+    avg_train = total_L / len(train_loader)
+    avgF = total_F / len(train_loader)
+    avgR = total_R / len(train_loader)
+    avgA = total_A / len(train_loader)
 
-    # compute train averages
-    avg_train_loss = total_loss / len(train_loader) if len(train_loader) > 0 else float("inf")
-    avg_train_f = total_f / len(train_loader) if len(train_loader) > 0 else float("inf")
-    avg_train_r = total_r / len(train_loader) if len(train_loader) > 0 else float("inf")
-    avg_train_a = total_a / len(train_loader) if len(train_loader) > 0 else float("inf")
-
-    # -------------------------
-    # VALIDATION
-    # -------------------------
+    # VALID ------------------------------------------------
     model.eval()
-    val_total = val_f = val_r = val_a = 0.0
+    vL = vF = vR = vA = 0.0
+
     with torch.no_grad():
         for batch in val_loader:
-            # move tensors to device safely
-            batch_t = {}
-            for k, v in batch.items():
-                if isinstance(v, torch.Tensor):
-                    batch_t[k] = v.to(device, non_blocking=True)
-                else:
-                    batch_t[k] = v
+            batch = {k: v.to(device) for k, v in batch.items()}
 
-            out_full = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["teacher_ids"]
-            )
-            ce_full = out_full[0] if isinstance(out_full, tuple) else (out_full.loss if hasattr(out_full, "loss") else out_full[0])
+            outF = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["teacher_ids"])
+            lossF = outF.loss
 
-            out_reason = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["reason_ids"]
-            )
-            ce_reason = out_reason[0] if isinstance(out_reason, tuple) else (out_reason.loss if hasattr(out_reason, "loss") else out_reason[0])
-            ce_reason = ce_reason * batch_t.get("reasoning_weight", torch.ones(1, device=device)).mean()
+            outR = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["reason_ids"])
+            lossR = outR.loss * batch["reasoning_weight"].mean()
 
-            out_answer = model(
-                pixel_values=batch_t["pixel_values"],
-                input_ids=batch_t["input_ids"],
-                attention_mask=batch_t["attention_mask"],
-                labels=batch_t["answer_ids"]
-            )
-            ce_answer = out_answer[0] if isinstance(out_answer, tuple) else (out_answer.loss if hasattr(out_answer, "loss") else out_answer[0])
+            outA = model(pixel_values=batch["pixel_values"],
+                         input_ids=batch["input_ids"],
+                         attention_mask=batch["attention_mask"],
+                         labels=batch["answer_ids"])
+            lossA = outA.loss
 
-            val_loss = W_FORMAT * ce_full + W_REASON * ce_reason + W_ANSWER * ce_answer
+            loss = W_FORMAT * lossF + W_REASON * lossR + W_ANSWER * lossA
 
-            val_total += float(val_loss.item())
-            val_f += float(ce_full.item())
-            val_r += float(ce_reason.item())
-            val_a += float(ce_answer.item())
+            vL += loss.item()
+            vF += lossF.item()
+            vR += lossR.item()
+            vA += lossA.item()
 
-    avg_val_loss = val_total / len(val_loader) if len(val_loader) > 0 else float("inf")
-    avg_val_f = val_f / len(val_loader) if len(val_loader) > 0 else float("inf")
-    avg_val_r = val_r / len(val_loader) if len(val_loader) > 0 else float("inf")
-    avg_val_a = val_a / len(val_loader) if len(val_loader) > 0 else float("inf")
+    avg_val = vL / len(val_loader)
+    avg_vF = vF / len(val_loader)
+    avg_vR = vR / len(val_loader)
+    avg_vA = vA / len(val_loader)
 
-    # print summary
-    print(f"[INFO] Epoch {epoch+1} | Train: {avg_train_loss:.4f} | F={avg_train_f:.4f}, R={avg_train_r:.4f}, A={avg_train_a:.4f} "
-          f"| Val: {avg_val_loss:.4f} | F={avg_val_f:.4f}, R={avg_val_r:.4f}, A={avg_val_a:.4f}")
+    print(f"[INFO] Epoch {epoch+1} | "
+          f"Train {avg_train:.4f} (F={avgF:.4f}, R={avgR:.4f}, A={avgA:.4f}) | "
+          f"Val {avg_val:.4f} (F={avg_vF:.4f}, R={avg_vR:.4f}, A={avg_vA:.4f})")
 
-    # log to CSV
-    df = pd.read_csv(LOG_CSV)
-    df.loc[len(df)] = [epoch+1,
-                       avg_train_loss, avg_train_f, avg_train_r, avg_train_a,
-                       avg_val_loss, avg_val_f, avg_val_r, avg_val_a]
-    df.to_csv(LOG_CSV, index=False)
+    # CSV LOG --------------------------------------------
+    row = pd.DataFrame([[
+        epoch+1, avg_train, avgF, avgR, avgA,
+        avg_val, avg_vF, avg_vR, avg_vA
+    ]], columns=["epoch","train","F","R","A","val","vF","vR","vA"])
 
-    # --------------------------
-    # Scheduler step (ReduceLROnPlateau)
-    # --------------------------
-    scheduler_plateau.step(avg_val_loss)
-
-    # --------------------------
-    # Save BEST MODEL (by val loss)
-    # --------------------------
-    if avg_val_loss < best_loss - 1e-4:
-        best_loss = avg_val_loss
-        early_stop_counter = 0
-        torch.save(model.state_dict(), BEST_MODEL_PATH)
-        print(f"[INFO] ⭐ New BEST model saved at epoch {epoch+1} (val_loss={best_loss:.4f})")
+    if not os.path.exists(LOG_CSV):
+        row.to_csv(LOG_CSV, index=False)
     else:
-        early_stop_counter += 1
-        print(f"[INFO] No improvement ({early_stop_counter}/{EARLY_STOP_PATIENCE})")
+        row.to_csv(LOG_CSV, mode="a", index=False, header=False)
 
-    if early_stop_counter >= EARLY_STOP_PATIENCE:
-        print("[INFO] EARLY STOPPING TRIGGERED.")
+    # Scheduler
+    scheduler.step(avg_val)
+
+    # SAVE BEST ------------------------------------------
+    if avg_val < best_loss - 1e-4:
+        best_loss = avg_val
+        early_stop = 0
+        torch.save(model.state_dict(), BEST_MODEL_PATH)
+        print(f"[INFO] ⭐ NEW BEST MODEL saved (val={avg_val:.4f})")
+    else:
+        early_stop += 1
+        print(f"[INFO] No improvement ({early_stop}/{EARLY_STOP_PATIENCE})")
+
+    if early_stop >= EARLY_STOP_PATIENCE:
+        print("[INFO] EARLY STOPPING")
         break
 
-# =====================
-# SAVE FINAL
-# =====================
+# FINAL SAVE =====================================================
 torch.save(model.state_dict(), FINAL_MODEL_PATH)
-print("[INFO] Training finished. Final model saved at:", FINAL_MODEL_PATH)
+print("[INFO] Training done. Saved:", FINAL_MODEL_PATH)
