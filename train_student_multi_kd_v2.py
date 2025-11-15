@@ -1,5 +1,5 @@
 """
-Full Student Fine-tuning (Multi-Objective KD) with RESUME + Validation (version 2)
+Full Student Fine-tuning (Multi-Objective KD) with LOAD-BEST + Validation (version 2)
 Author: Updated by ChatGPT
 Notes:
  - LR = 5e-6
@@ -30,7 +30,6 @@ SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
 FINAL_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
-RESUME_PATH = "/kaggle/input/resume-state/transformers/default/1/resume_state.pth"
 LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_multiKD.csv")
 
 EPOCHS = 60
@@ -163,6 +162,7 @@ if pad_id is None:
     pad_id = -100
 ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=pad_id)
 
+# initialize training control vars
 best_loss = float("inf")
 early_stop_counter = 0
 start_epoch = 0
@@ -174,32 +174,34 @@ if not os.path.exists(LOG_CSV):
                                     "val_loss", "val_F", "val_R", "val_A"])
     df_init.to_csv(LOG_CSV, index=False)
 
-# ---------------------
-# RESUME CHECKPOINT
-# ---------------------
-if os.path.exists(RESUME_PATH):
-    print("[INFO] Resuming training from previous checkpoint...")
-    ckpt = torch.load(RESUME_PATH, map_location=device)
-    try:
-        model.load_state_dict(ckpt["model"])
-        optimizer.load_state_dict(ckpt["optimizer"])
-        if "scheduler" in ckpt and ckpt["scheduler"] is not None:
-            try:
-                scheduler_plateau.load_state_dict(ckpt["scheduler"])
-            except Exception:
-                print("[WARN] Could not fully restore scheduler state (continuing).")
-        scaler.load_state_dict(ckpt["scaler"])
-        start_epoch = ckpt.get("epoch", 0) + 1
-        best_loss = ckpt.get("best_loss", float("inf"))
-        early_stop_counter = ckpt.get("early_stop_counter", 0)
-        print(f"[INFO] Resumed at epoch {start_epoch} (best_loss={best_loss:.4f})")
-    except Exception as e:
-        print(f"[WARN] Resume loading partial states: {e}")
-        model.load_state_dict(ckpt.get("model", ckpt))
-        start_epoch = ckpt.get("epoch", 0) + 1
+# =====================
+# LOAD BEST MODEL (weights-only) THEN START NEW TRAIN RUN
+# =====================
+try:
+    print(f"[INFO] Loading previous BEST model: {BEST_MODEL_PATH}")
+    best_state = torch.load("/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
+    # if saved as state_dict or model.state_dict()
+    if isinstance(best_state, dict) and not any(k in best_state for k in ("optimizer", "scaler", "scheduler", "epoch")):
+        # assume it's model.state_dict()
+        model.load_state_dict(best_state)
+    else:
+        # maybe user saved a checkpoint dict accidentally, handle both
+        if "model" in best_state:
+            model.load_state_dict(best_state["model"])
+        else:
+            model.load_state_dict(best_state)
+    print("[INFO] Successfully loaded best model for new training run.")
+except Exception as e:
+    print(f"[WARN] Could not load BEST_MODEL_PATH fully: {e}. Training from current weights.")
+
+# reset optimizer/scheduler/scaler state for a clean new run
+# (we intentionally DO NOT load optimizer/scheduler/scaler from previous resume)
+start_epoch = 0
+best_loss = float("inf")
+early_stop_counter = 0
 
 # =====================
-# TRAIN LOOP (version 2)
+# TRAIN LOOP (version 2) - LOAD-BEST then new training
 # =====================
 print("[INFO] Start training (version 2)... LR=%.2e, W=(F=%.2f,R=%.2f,A=%.2f), max_a_len=%d"
       % (LR, W_FORMAT, W_REASON, W_ANSWER, MAX_A_LEN))
@@ -213,12 +215,23 @@ for epoch in range(start_epoch, EPOCHS):
     progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}", leave=False)
 
     for batch in progress:
-        # move tensors to device
-        batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
+        # move tensors to device safely
+        batch_t = {}
+        for k, v in batch.items():
+            if isinstance(v, torch.Tensor):
+                batch_t[k] = v.to(device, non_blocking=True)
+            else:
+                batch_t[k] = v
 
         # ensure reasoning weight exists
         if "reasoning_weight" not in batch_t:
-            batch_t["reasoning_weight"] = torch.ones(len(batch_t["input_ids"]), device=device)
+            # determine batch size from input_ids if available
+            bsz = batch_t["input_ids"].size(0) if "input_ids" in batch_t else 1
+            batch_t["reasoning_weight"] = torch.ones(bsz, device=device)
+
+        # ensure pixel_values exists
+        if "pixel_values" not in batch_t:
+            raise ValueError("Batch missing pixel_values. Check dataset/collate function.")
 
         with autocast_ctx():
             # full teacher output
@@ -287,7 +300,14 @@ for epoch in range(start_epoch, EPOCHS):
     val_total = val_f = val_r = val_a = 0.0
     with torch.no_grad():
         for batch in val_loader:
-            batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
+            # move tensors to device safely
+            batch_t = {}
+            for k, v in batch.items():
+                if isinstance(v, torch.Tensor):
+                    batch_t[k] = v.to(device, non_blocking=True)
+                else:
+                    batch_t[k] = v
+
             out_full = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
@@ -335,20 +355,6 @@ for epoch in range(start_epoch, EPOCHS):
                        avg_train_loss, avg_train_f, avg_train_r, avg_train_a,
                        avg_val_loss, avg_val_f, avg_val_r, avg_val_a]
     df.to_csv(LOG_CSV, index=False)
-
-    # -------------------------
-    # Save RESUME checkpoint
-    # -------------------------
-    resume_state = {
-        "epoch": epoch,
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler_plateau.state_dict() if scheduler_plateau is not None else None,
-        "scaler": scaler.state_dict(),
-        "best_loss": best_loss,
-        "early_stop_counter": early_stop_counter
-    }
-    torch.save(resume_state, RESUME_PATH)
 
     # --------------------------
     # Scheduler step (ReduceLROnPlateau)
