@@ -2,11 +2,11 @@
 Full Student Fine-tuning (Multi-Objective KD) with RESUME + Validation (version 2)
 Author: Updated by ChatGPT
 Notes:
- - LR lowered to 5e-6
- - KD weights adjusted: F=0.23, R=0.50, A=0.27
- - Use ReduceLROnPlateau (scheduler) on val loss
- - Early stopping patience increased to 10
- - max_a_len increased to 160
+ - LR = 5e-6
+ - KD weights: F=0.23, R=0.50, A=0.27
+ - ReduceLROnPlateau scheduler on validation loss
+ - Early stopping patience = 10
+ - max_a_len = 160
  - CSV logging for train/val losses and components
 """
 
@@ -20,6 +20,7 @@ from PIL import Image
 import pandas as pd
 from transformers import BlipProcessor, AutoTokenizer
 from model import VQAGenModel
+from contextlib import nullcontext
 
 # =====================
 # CONFIG (version 2)
@@ -35,7 +36,7 @@ LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_multiKD.csv")
 EPOCHS = 60
 LR = 5e-6                # reduced LR for fine-tuning
 BATCH_SIZE = 4
-WARMUP_RATIO = 0.02     # not used with ReduceLROnPlateau but kept for record
+WARMUP_RATIO = 0.02     # kept for record
 EARLY_STOP_PATIENCE = 10
 VAL_RATIO = 0.1         # 10% validation
 MAX_A_LEN = 160         # allow longer reasoning
@@ -150,11 +151,11 @@ print(f"[INFO] Dataset sizes -> total: {len(dataset)}, train: {len(train_dataset
 # =====================
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
 
-# Use ReduceLROnPlateau driven by validation loss (better for fine-tuning)
+# ReduceLROnPlateau driven by validation loss (better for fine-tuning)
 scheduler_plateau = torch.optim.lr_scheduler.ReduceLROnPlateau(optimizer, mode="min",
                                                                factor=0.5, patience=2, verbose=True)
 
-# keep scaler for mixed precision
+# mixed precision scaler
 scaler = torch.cuda.amp.GradScaler()
 
 pad_id = getattr(model.decoder_tokenizer, "pad_token_id", None)
@@ -179,11 +180,9 @@ if not os.path.exists(LOG_CSV):
 if os.path.exists(RESUME_PATH):
     print("[INFO] Resuming training from previous checkpoint...")
     ckpt = torch.load(RESUME_PATH, map_location=device)
-    # safe load: if keys mismatch, try partial
     try:
         model.load_state_dict(ckpt["model"])
         optimizer.load_state_dict(ckpt["optimizer"])
-        # scheduler state loading is optional (ReduceLROnPlateau expects dict)
         if "scheduler" in ckpt and ckpt["scheduler"] is not None:
             try:
                 scheduler_plateau.load_state_dict(ckpt["scheduler"])
@@ -196,7 +195,6 @@ if os.path.exists(RESUME_PATH):
         print(f"[INFO] Resumed at epoch {start_epoch} (best_loss={best_loss:.4f})")
     except Exception as e:
         print(f"[WARN] Resume loading partial states: {e}")
-        # fallback load model only
         model.load_state_dict(ckpt.get("model", ckpt))
         start_epoch = ckpt.get("epoch", 0) + 1
 
@@ -205,6 +203,9 @@ if os.path.exists(RESUME_PATH):
 # =====================
 print("[INFO] Start training (version 2)... LR=%.2e, W=(F=%.2f,R=%.2f,A=%.2f), max_a_len=%d"
       % (LR, W_FORMAT, W_REASON, W_ANSWER, MAX_A_LEN))
+
+# choose proper autocast context
+autocast_ctx = torch.cuda.amp.autocast if device == "cuda" else nullcontext
 
 for epoch in range(start_epoch, EPOCHS):
     model.train()
@@ -219,7 +220,7 @@ for epoch in range(start_epoch, EPOCHS):
         if "reasoning_weight" not in batch_t:
             batch_t["reasoning_weight"] = torch.ones(len(batch_t["input_ids"]), device=device)
 
-        with torch.amp.autocast(device_type='cuda') if device.startswith("cuda") else torch.cpu.amp.autocast():
+        with autocast_ctx():
             # full teacher output
             out_full = model(
                 pixel_values=batch_t["pixel_values"],
@@ -227,11 +228,7 @@ for epoch in range(start_epoch, EPOCHS):
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
             )
-            # model expected to return (loss, logits) or ModelOutput with .loss
-            if isinstance(out_full, tuple):
-                ce_full = out_full[0]
-            else:
-                ce_full = out_full.loss if hasattr(out_full, "loss") else out_full[0]
+            ce_full = out_full[0] if isinstance(out_full, tuple) else (out_full.loss if hasattr(out_full, "loss") else out_full[0])
 
             # reasoning-only
             out_reason = model(
@@ -240,10 +237,7 @@ for epoch in range(start_epoch, EPOCHS):
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["reason_ids"]
             )
-            if isinstance(out_reason, tuple):
-                ce_reason = out_reason[0]
-            else:
-                ce_reason = out_reason.loss if hasattr(out_reason, "loss") else out_reason[0]
+            ce_reason = out_reason[0] if isinstance(out_reason, tuple) else (out_reason.loss if hasattr(out_reason, "loss") else out_reason[0])
 
             # scale reason by per-sample weight (mean across batch)
             rw_scalar = batch_t["reasoning_weight"].mean()
@@ -256,10 +250,7 @@ for epoch in range(start_epoch, EPOCHS):
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["answer_ids"]
             )
-            if isinstance(out_answer, tuple):
-                ce_answer = out_answer[0]
-            else:
-                ce_answer = out_answer.loss if hasattr(out_answer, "loss") else out_answer[0]
+            ce_answer = out_answer[0] if isinstance(out_answer, tuple) else (out_answer.loss if hasattr(out_answer, "loss") else out_answer[0])
 
             # final weighted loss
             loss_total = W_FORMAT * ce_full + W_REASON * ce_reason + W_ANSWER * ce_answer
@@ -297,7 +288,6 @@ for epoch in range(start_epoch, EPOCHS):
     with torch.no_grad():
         for batch in val_loader:
             batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-            # forward same way
             out_full = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
