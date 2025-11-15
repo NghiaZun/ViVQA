@@ -175,20 +175,20 @@ model.load_state_dict(best_ckpt)
 print("[INFO] BEST model loaded. Training will continue from this state.")
 
 # =====================
-# TRAIN LOOP
+# TRAIN LOOP with gradient accumulation
 # =====================
-print("[INFO] Start training from BEST model...")
+accum_steps = 4  # effective batch size = BATCH_SIZE * accum_steps
 
 autocast_ctx = torch.cuda.amp.autocast if device == "cuda" else nullcontext
 
 for epoch in range(start_epoch, EPOCHS):
     model.train()
     total_loss = total_f = total_r = total_a = 0.0
+    optimizer.zero_grad(set_to_none=True)  # ensure grad zeroed at epoch start
     progress = tqdm(train_loader, desc=f"Epoch {epoch+1}/{EPOCHS}", leave=False)
 
-    for batch in progress:
+    for step, batch in enumerate(progress):
         batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-
         batch_t.setdefault("reasoning_weight", torch.ones(batch_t["input_ids"].size(0), device=device))
 
         with autocast_ctx():
@@ -218,20 +218,25 @@ for epoch in range(start_epoch, EPOCHS):
             ce_answer = out_answer[0] if isinstance(out_answer, tuple) else out_answer.loss
 
             loss_total = W_FORMAT * ce_full + W_REASON * ce_reason + W_ANSWER * ce_answer
+            loss_total = loss_total / accum_steps  # divide for accumulation
 
         scaler.scale(loss_total).backward()
-        torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
-        scaler.step(optimizer)
-        scaler.update()
-        optimizer.zero_grad(set_to_none=True)
 
-        total_loss += float(loss_total.item())
+        # gradient clipping only at optimizer step
+        if (step + 1) % accum_steps == 0 or (step + 1) == len(train_loader):
+            scaler.unscale_(optimizer)
+            torch.nn.utils.clip_grad_norm_(model.parameters(), 1.0)
+            scaler.step(optimizer)
+            scaler.update()
+            optimizer.zero_grad(set_to_none=True)
+
+        total_loss += float(loss_total.item()) * accum_steps  # multiply back for logging
         total_f += float(ce_full.item())
         total_r += float(ce_reason.item())
         total_a += float(ce_answer.item())
 
         progress.set_postfix({
-            "loss": f"{loss_total.item():.4f}",
+            "loss": f"{(loss_total.item()*accum_steps):.4f}",
             "F": f"{ce_full.item():.4f}",
             "R": f"{ce_reason.item():.4f}",
             "A": f"{ce_answer.item():.4f}"
@@ -243,7 +248,7 @@ for epoch in range(start_epoch, EPOCHS):
     avg_train_a = total_a / len(train_loader)
 
     # =====================
-    # VALIDATION
+    # VALIDATION (không cần accumulation)
     # =====================
     model.eval()
     val_total = val_f = val_r = val_a = 0.0
