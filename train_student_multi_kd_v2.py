@@ -35,7 +35,7 @@ LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_multiKD.csv")
 
 EPOCHS = 60
 LR = 5e-6
-BATCH_SIZE = 4
+BATCH_SIZE = 2
 VAL_RATIO = 0.1
 MAX_A_LEN = 128
 EARLY_STOP_PATIENCE = 10
