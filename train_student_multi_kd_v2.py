@@ -30,7 +30,7 @@ SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
 FINAL_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
-RESUME_PATH = os.path.join(SAVE_DIR, "resume_state.pth")
+RESUME_PATH = /kaggle/input/resume-state/transformers/default/1/resume_state.pth
 LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_multiKD.csv")
 
 EPOCHS = 60
