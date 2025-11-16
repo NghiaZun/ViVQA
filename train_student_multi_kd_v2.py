@@ -170,7 +170,7 @@ if not os.path.exists(LOG_CSV):
 # LOAD BEST MODEL FOR RESUME
 # =====================
 print(f"[INFO] Loading BEST model:")
-best_ckpt = torch.load("/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
+best_ckpt = torch.load("/kaggle/input/v3/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
 model.load_state_dict(best_ckpt)
 print("[INFO] BEST model loaded. Training will continue from this state.")
 
