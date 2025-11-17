@@ -10,8 +10,8 @@ from transformers import (
 class VQAGenModel(nn.Module):
     def __init__(self,
                  vision_model_name="Salesforce/blip-vqa-base",
-                 phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-                 vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer",
+                 phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
+                 vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer",
                  hidden_dim=768):
         super().__init__()
 
