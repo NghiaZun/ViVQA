@@ -1,275 +1,249 @@
-"""
-Day 6.4 — Evaluation Final: Teacher vs Student vs Ground Truth (Fixed Parsing)
-Author: Hân (revised by ChatGPT)
-"""
-
 import os
-import re
 import json
-import pandas as pd
-from tqdm import tqdm
-from PIL import Image
 import torch
-from transformers import AutoProcessor, AutoModelForVision2Seq, BlipProcessor
+from torch.utils.data import DataLoader
+import pandas as pd
+import numpy as np
+from tqdm import tqdm
+import re
+import unicodedata
+
+from transformers import AutoTokenizer, BlipImageProcessor
+from rouge_score import rouge_scorer
+
+from dataset import VQAGenDataset
 from model import VQAGenModel
-from evaluate import load
 
-# ===============================
-# CONFIG
-# ===============================
-device = "cuda" if torch.cuda.is_available() else "cpu"
-print(f"[INFO] Device: {device}")
 
-DATA_PATH  = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
-IMAGE_DIR  = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
-SAVE_PATH  = "/kaggle/working/vqa_eval_teacher_student_fixed.csv"
-
-TEACHER_ID    = "Qwen/Qwen2-VL-7B-Instruct"
-STUDENT_CKPT  = "/kaggle/input/checkpoint/pytorch/default/1/vqa_student_best.pt"
-PHOBERT_DIR   = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/phobert_tokenizer"
-VIT5_DIR      = "/kaggle/input/checkpoints-data/tensorflow2/default/1/checkpoints/vit5_tokenizer"
-VISION_MODEL  = "Salesforce/blip-vqa-base"
-
-# Metrics
-bleu      = load("bleu")
-rouge     = load("rouge")
-bertscore = load("bertscore")
-
-# ===============================
-# Helpers: Normalization & Parsing
-# ===============================
-
-def normalize_text(s: str) -> str:
-    if not isinstance(s, str):
+# =============================
+# NORMALIZATION + METRICS
+# =============================
+def normalize_text(s):
+    if s is None:
         return ""
-    s = s.replace("\u200b", "").replace("\ufeff", "")
-    s = re.sub(r"\s+", " ", s.strip().lower())
+    s = s.lower().strip()
+    s = unicodedata.normalize("NFC", s)
+    s = re.sub(r"[^\w\s]", "", s)
     return s
 
-def strip_prompt_scaffold(text: str) -> str:
-    """Loại bỏ khung 'Trả lời dạng: Answer: ... Reasoning: ...' nếu có."""
-    if not isinstance(text, str):
-        return ""
-    # cắt phần scaffold nếu có
-    text = re.sub(
-        r"trả lời dạng\s*:\s*answer\s*:\s*\.\.\.\s*reasoning\s*:\s*\.\.\.\s*",
-        "",
-        text,
-        flags=re.IGNORECASE
-    )
-    return text.strip()
 
-def extract_last_answer(text: str) -> str:
+def token_f1(pred, gt):
+    pred_t = normalize_text(pred).split()
+    gt_t = normalize_text(gt).split()
+    if len(pred_t) == 0 or len(gt_t) == 0:
+        return 0
+    common = set(pred_t) & set(gt_t)
+    if len(common) == 0:
+        return 0
+    p = len(common) / len(pred_t)
+    r = len(common) / len(gt_t)
+    return 2 * p * r / (p + r)
+
+
+# =============================
+# PARSE STUDENT XLM
+# =============================
+def parse_student_output(text):
     """
-    Tìm TẤT CẢ 'Answer:' và lấy cái CUỐI CÙNG (tránh dính placeholder '...').
-    Hỗ trợ 'Đáp án:' như synonym.
+    Student output format expected:
+      <answer type="xxx"> ... </answer>
+      <reasoning> ... </reasoning>
     """
-    if not isinstance(text, str):
-        return ""
-    txt = strip_prompt_scaffold(text)
-    # Gom theo dòng để tránh nuốt Reasoning
-    lines = [l.strip() for l in txt.splitlines() if l.strip()]
-    ans_list = []
-    for line in lines:
-        m = re.match(r"^(answer|đáp án)\s*[:：]\s*(.*)$", line, flags=re.IGNORECASE)
-        if m:
-            ans_list.append(m.group(2).strip())
-    if ans_list:
-        return ans_list[-1]
+    if text is None:
+        return "", "", ""
 
-    # Fallback: pattern đa dòng (đến trước "Reasoning"/"Giải thích")
-    m = re.findall(
-        r"(?:^|\n)(?:answer|đáp án)\s*[:：]\s*(.*?)(?=\n(?:reasoning|giải thích|lý do)\s*[:：]|$)",
-        txt,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        return m[-1].strip()
+    text = text.strip()
 
-    # Fallback cuối: nếu không có nhãn nào, trả toàn bộ text
-    return txt.strip()
+    # answer
+    ans = re.search(r"<answer(?: type=\"(.*?)\")?>(.*?)</answer>", text, flags=re.DOTALL)
+    if ans:
+        answer_type = ans.group(1) if ans.group(1) else ""
+        answer = ans.group(2).strip()
+    else:
+        answer = text.strip()
+        answer_type = ""
 
-def extract_reasoning(text: str) -> str:
-    """
-    Lấy Reasoning sau nhãn 'Reasoning:' hoặc 'Giải thích:' hoặc 'Lý do:'.
-    Lấy lần CUỐI cùng.
-    """
-    if not isinstance(text, str):
-        return ""
-    txt = strip_prompt_scaffold(text)
+    # reasoning
+    rs = re.search(r"<reasoning>(.*?)</reasoning>", text, flags=re.DOTALL)
+    reasoning = rs.group(1).strip() if rs else ""
 
-    lines = [l.strip() for l in txt.splitlines() if l.strip()]
-    rea_list = []
-    for line in lines:
-        m = re.match(r"^(reasoning|giải thích|lý do)\s*[:：]\s*(.*)$", line, flags=re.IGNORECASE)
-        if m:
-            rea_list.append(m.group(2).strip())
-    if rea_list:
-        return rea_list[-1]
+    return answer, reasoning, answer_type
 
-    # Fallback đa dòng
-    m = re.findall(
-        r"(?:^|\n)(?:reasoning|giải thích|lý do)\s*[:：]\s*(.*)$",
-        txt,
-        flags=re.IGNORECASE | re.DOTALL,
-    )
-    if m:
-        return m[-1].strip()
 
-    return ""
+# =============================
+# PARSE TEACHER RAW
+# =============================
+def parse_teacher_raw(obj):
+    """Input: teacher JSONL object"""
+    answer = obj.get("teacher_answer", "")
+    reasoning = obj.get("teacher_reasoning", "")
+    r_type = obj.get("reasoning_type", "")
+    weight = obj.get("reasoning_weight", 1)
+    return answer, reasoning, r_type, weight
 
-def split_answer_reasoning(text: str):
-    """
-    Parser thống nhất cho cả teacher/student.
-    - Có nhãn => lấy Answer/Reasoning (lần xuất hiện cuối).
-    - Không nhãn => Answer = toàn văn, Reasoning = "".
-    """
-    if not isinstance(text, str):
-        return "", ""
-    ans = extract_last_answer(text)
-    rea = extract_reasoning(text)
-    # Trường hợp student chỉ trả lời ngắn không có nhãn
-    if not ans and text:
-        ans = text.strip()
-    return ans.strip(), rea.strip()
 
-# ===============================
-# Load Teacher
-# ===============================
-print("[INFO] Loading Teacher Model...")
-teacher_processor = AutoProcessor.from_pretrained(TEACHER_ID, trust_remote_code=True)
-teacher_model = AutoModelForVision2Seq.from_pretrained(
-    TEACHER_ID,
-    torch_dtype=torch.float16,
-    device_map="auto",
-    trust_remote_code=True
-)
-teacher_model.eval()
+# =============================
+# PATH CONFIG
+# =============================
+TEST_CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
+IMAGE_FOLDER = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
 
-def infer_teacher(image, question):
-    # Prompt ngắn gọn, tránh scaffold gây nhiễu
-    prompt = (
-        "Trả lời VQA bằng tiếng Việt, đúng format:\n"
-        "Answer: <ngắn gọn>\n"
-        "Reasoning: <ngắn gọn>\n\n"
-        f"Câu hỏi: {question}\n"
-        "Answer:"
-    )
-    inputs = teacher_processor(text=[prompt], images=[image], return_tensors="pt").to(device)
-    with torch.no_grad():
-        out = teacher_model.generate(
-            **inputs, max_new_tokens=80, temperature=0.2, top_p=0.95
-        )
-    return teacher_processor.batch_decode(out, skip_special_tokens=True)[0].strip()
+STUDENT_CKPT = "/kaggle/input/final/transformers/default/1/vqa_student_best_multiKD.pt"
+TEACHER_JSONL = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
 
-# ===============================
-# Load Student
-# ===============================
-print("[INFO] Loading Student Model...")
-vision_processor = BlipProcessor.from_pretrained(VISION_MODEL)
-student = VQAGenModel(
-    vision_model_name=VISION_MODEL,
-    phobert_dir=PHOBERT_DIR,
-    vit5_dir=VIT5_DIR
-)
-student.load_state_dict(torch.load(STUDENT_CKPT, map_location=device))
-student.to(device)
+DEVICE = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+BATCH_SIZE = 4
+
+
+# =============================
+# LOAD STUDENT MODEL
+# =============================
+print("[INFO] Loading student model...")
+student = VQAGenModel().to(DEVICE)
+student.load_state_dict(torch.load(STUDENT_CKPT, map_location=DEVICE))
 student.eval()
 
-def infer_student(image, question):
-    pixel_values = vision_processor(image, return_tensors="pt").pixel_values.to(device)
-    enc = student.text_tokenizer(question, return_tensors="pt", truncation=True).to(device)
-    with torch.no_grad():
-        out = student.generate(
-            pixel_values=pixel_values,
-            input_ids=enc.input_ids,
-            attention_mask=enc.attention_mask,
-            max_length=80,
-            num_beams=4
-        )
-    return student.decoder_tokenizer.batch_decode(out, skip_special_tokens=True)[0].strip()
+q_tokenizer = AutoTokenizer.from_pretrained("/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer")
+a_tokenizer = AutoTokenizer.from_pretrained("/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer")
 
-# ===============================
-#  Inference
-# ===============================
-df = pd.read_csv(DATA_PATH).head(100)
+vision_processor = BlipImageProcessor.from_pretrained("Salesforce/blip-vqa-base")
+
+
+# =============================
+# LOAD DATA
+# =============================
+test_dataset = VQAGenDataset(TEST_CSV_PATH, IMAGE_FOLDER, vision_processor)
+test_loader = DataLoader(test_dataset, batch_size=BATCH_SIZE, shuffle=False)
+
+df_test = pd.read_csv(TEST_CSV_PATH)
+
+
+# =============================
+# LOAD TEACHER JSONL
+# =============================
+print("[INFO] Loading teacher JSONL...")
+teacher_list = []
+with open(TEACHER_JSONL, "r", encoding="utf-8") as f:
+    for line in f:
+        teacher_list.append(json.loads(line))
+
+assert len(teacher_list) == len(df_test), "Teacher JSONL length != test.csv length"
+
+
+# =============================
+# EVALUATION LOOP
+# =============================
 records = []
 
-for _, row in tqdm(df.iterrows(), total=len(df)):
-    q  = str(row["question"])
-    gt = str(row["answer"]) if "answer" in row and pd.notna(row["answer"]) else ""
-    img_path = os.path.join(IMAGE_DIR, f"{row['img_id']}.jpg")
+refs = []
+student_predictions = []
+teacher_predictions = []
 
-    if not os.path.exists(img_path):
-        continue
+scorer = rouge_scorer.RougeScorer(["rouge1", "rougeLsum"], use_stemmer=True)
 
-    image = Image.open(img_path).convert("RGB")
+idx = 0
 
-    t_out = infer_teacher(image, q)
-    s_out = infer_student(image, q)
+print("[INFO] Running student model inference...")
 
-    # Robust parsing
-    t_ans, t_rea = split_answer_reasoning(t_out)
-    s_ans, s_rea = split_answer_reasoning(s_out)
+with torch.no_grad():
+    for pixel_values, input_ids, attention_mask, labels in tqdm(test_loader):
 
-    records.append({
-        "img_id": row["img_id"],
-        "question": q,
-        "ground_truth": gt,
-        "teacher_answer": t_ans,
-        "teacher_reasoning": t_rea,
-        "student_answer": s_ans,
-        "student_reasoning": s_rea,
-        "teacher_output_raw": t_out,
-        "student_output_raw": s_out
-    })
+        pixel_values = pixel_values.to(DEVICE)
+        input_ids = input_ids.to(DEVICE)
+        attention_mask = attention_mask.to(DEVICE)
 
-df_out = pd.DataFrame(records)
-df_out.to_csv(SAVE_PATH, index=False)
-print(f"[INFO] ✅ Predictions saved → {SAVE_PATH}")
+        pred_ids = student.generate(pixel_values, input_ids, attention_mask)
+        student_outs = [
+            a_tokenizer.decode(p, skip_special_tokens=True)
+            for p in pred_ids
+        ]
 
-# ===============================
-#  Compute Metrics
-# ===============================
-# Chỉ giữ hàng đủ dữ liệu
-df_valid = df_out.fillna("").query("ground_truth.str.len() > 0 and teacher_answer.str.len() > 0 and student_answer.str.len() > 0")
+        # Decode GT
+        gt_batch = [
+            a_tokenizer.decode([x for x in lab.tolist() if x != -100], skip_special_tokens=True)
+            for lab in labels
+        ]
 
-gt            = [normalize_text(x) for x in df_valid["ground_truth"].tolist()]
-teacher_preds = [normalize_text(x) for x in df_valid["teacher_answer"].tolist()]
-student_preds = [normalize_text(x) for x in df_valid["student_answer"].tolist()]
+        batch_size = len(gt_batch)
 
-# BLEU: references phải là List[List[str]]
-refs_bleu = [[r] for r in gt]
+        for b in range(batch_size):
+            gt = gt_batch[b]
+            st_raw = student_outs[b]
 
-teacher_bleu = bleu.compute(predictions=teacher_preds, references=refs_bleu, smooth=True)["bleu"]
-student_bleu = bleu.compute(predictions=student_preds, references=refs_bleu, smooth=True)["bleu"]
+            teacher_obj = teacher_list[idx]
+            idx += 1
 
-teacher_rouge = rouge.compute(predictions=teacher_preds, references=gt)["rougeL"]
-student_rouge = rouge.compute(predictions=student_preds, references=gt)["rougeL"]
+            # Parse student output
+            st_answer, st_reason, st_type = parse_student_output(st_raw)
 
-bert_teacher = bertscore.compute(predictions=teacher_preds, references=gt, lang="vi")["f1"]
-bert_student = bertscore.compute(predictions=student_preds, references=gt, lang="vi")["f1"]
-teacher_bert = sum(bert_teacher) / max(1, len(bert_teacher))
-student_bert = sum(bert_student) / max(1, len(bert_student))
+            # Parse teacher output format v2
+            tc_answer, tc_reason, tc_rtype, tc_weight = parse_teacher_raw(teacher_obj)
 
-print("\n=========== FINAL EVALUATION REPORT (FIXED) ===========")
-print(f"BLEU            | Teacher: {teacher_bleu:.4f} | Student: {student_bleu:.4f}")
-print(f"ROUGE-L         | Teacher: {teacher_rouge:.4f} | Student: {student_rouge:.4f}")
-print(f"BERTScore (F1)  | Teacher: {teacher_bert:.4f} | Student: {student_bert:.4f}")
-print("======================================================\n")
+            refs.append(gt)
+            student_predictions.append(st_answer)
+            teacher_predictions.append(tc_answer)
 
-with open("/kaggle/working/metrics_summary.json", "w", encoding="utf-8") as f:
-    json.dump(
-        {
-            "Teacher": {"BLEU": teacher_bleu, "ROUGE-L": teacher_rouge, "BERTScore_F1": teacher_bert},
-            "Student": {"BLEU": student_bleu, "ROUGE-L": student_rouge, "BERTScore_F1": student_bert},
-            "n_samples": len(df_valid)
-        },
-        f,
-        indent=2,
-        ensure_ascii=False
-    )
-print("[INFO] 📊 metrics_summary.json saved.")
+            records.append({
+                "img_id": teacher_obj["img_id"],
+                "question": teacher_obj["question"],
+                "ground_truth": gt,
+
+                "student_answer": st_answer,
+                "student_reasoning": st_reason,
+                "student_answer_type": st_type,
+
+                "teacher_answer": tc_answer,
+                "teacher_reasoning": tc_reason,
+                "teacher_reasoning_type": tc_rtype,
+                "reasoning_weight": tc_weight,
+            })
 
 
+# =============================
+# METRICS (Student + Teacher)
+# =============================
+def compute_metrics(preds, refs):
+    r1 = []
+    rl = []
+    f1 = []
+    acc = []
 
+    for p, r in zip(preds, refs):
+        p_n = normalize_text(p)
+        r_n = normalize_text(r)
+
+        sc = scorer.score(r_n, p_n)
+        r1.append(sc["rouge1"].fmeasure)
+        rl.append(sc["rougeLsum"].fmeasure)
+        f1.append(token_f1(p, r))
+        acc.append(p_n == r_n)
+
+    return {
+        "EM": np.mean(acc),
+        "ROUGE1": np.mean(r1),
+        "ROUGEL": np.mean(rl),
+        "F1": np.mean(f1)
+    }
+
+
+student_metrics = compute_metrics(student_predictions, refs)
+teacher_metrics = compute_metrics(teacher_predictions, refs)
+
+
+print("\n====== STUDENT METRICS ======")
+for k, v in student_metrics.items():
+    print(f"{k}: {v:.4f}")
+
+print("\n====== TEACHER METRICS ======")
+for k, v in teacher_metrics.items():
+    print(f"{k}: {v:.4f}")
+
+
+# =============================
+# SAVE CSV
+# =============================
+out_csv = "/kaggle/working/eval_student_teacher_v2.csv"
+pd.DataFrame(records).to_csv(out_csv, index=False, encoding="utf-8-sig")
+
+print(f"\n[INFO] Saved CSV → {out_csv}")
+print("DONE.")
