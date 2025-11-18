@@ -3,18 +3,20 @@ import torch
 from torch import nn
 from transformers import (
     BlipForQuestionAnswering,
-    AutoTokenizer, AutoModel,
+    AutoTokenizer,
+    AutoModel,
     AutoModelForSeq2SeqLM
 )
 
+
 class VQAGenModel(nn.Module):
-    """
-    VQA student model:
+    """VQA student model:
     - Vision: BLIP ViT
     - Text: PhoBERT
     - Decoder: VietT5
     - Fusion: concat vision+text features -> linear layers
     """
+    
     def __init__(self,
                  vision_model_name="Salesforce/blip-vqa-base",
                  phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
@@ -38,7 +40,7 @@ class VQAGenModel(nn.Module):
             self.text_encoder = AutoModel.from_pretrained("vinai/phobert-base")
         else:
             self.text_encoder = AutoModel.from_pretrained(phobert_dir)
-
+        
         try:
             self.text_tokenizer = AutoTokenizer.from_pretrained(phobert_dir, use_fast=False)
         except Exception:
@@ -66,23 +68,24 @@ class VQAGenModel(nn.Module):
             self.decoder = AutoModelForSeq2SeqLM.from_pretrained("VietAI/vit5-base")
         else:
             self.decoder = AutoModelForSeq2SeqLM.from_pretrained(vit5_dir)
-
+        
         try:
             self.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_dir, use_fast=False)
         except Exception:
             print("[WARN] VietT5 tokenizer fallback to HF hub...")
             self.decoder_tokenizer = AutoTokenizer.from_pretrained("VietAI/vit5-base", use_fast=False)
 
-    # -----------------------
-    # Forward pass
-    # -----------------------
     def forward(self, pixel_values, input_ids, attention_mask=None, labels=None):
-        """
-        Forward pass for training/inference
-        - pixel_values: image tensor (B,C,H,W)
-        - input_ids, attention_mask: question tokenized
-        - labels: optional for decoder loss
-        Returns: decoder outputs (logits, loss if labels)
+        """Forward pass for training/inference
+        
+        Args:
+            pixel_values: image tensor (B,C,H,W)
+            input_ids: question tokenized
+            attention_mask: attention mask for question
+            labels: optional for decoder loss
+            
+        Returns:
+            decoder outputs (logits, loss if labels)
         """
         # Vision features
         vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
@@ -98,12 +101,19 @@ class VQAGenModel(nn.Module):
         fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long, device=fused.device)
 
         # Encode + decode
-        encoder_outputs = self.decoder.get_encoder()(inputs_embeds=fused, attention_mask=fusion_mask)
+        encoder_outputs = self.decoder.get_encoder()(
+            inputs_embeds=fused,
+            attention_mask=fusion_mask
+        )
 
         if labels is not None:
-            return self.decoder(encoder_outputs=encoder_outputs, labels=labels, return_dict=True)
+            return self.decoder(
+                encoder_outputs=encoder_outputs,
+                labels=labels,
+                return_dict=True
+            )
         else:
-            # return token IDs
+            # Return token IDs
             return self.decoder.generate(
                 inputs_embeds=fused,
                 attention_mask=fusion_mask,
@@ -114,22 +124,22 @@ class VQAGenModel(nn.Module):
                 eos_token_id=self.decoder_tokenizer.eos_token_id
             )
 
-    # -----------------------
-    # Generate helper
-    # -----------------------
-    def generate(self, pixel_values, input_ids, attention_mask=None, max_length=32):
-        vision_feats = self.vision_encoder(pixel_values=pixel_values).last_hidden_state.mean(dim=1)
-        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = text_out[:, 0, :]
-        fused = self.fusion(torch.cat([vision_feats, text_feats], dim=-1)).unsqueeze(1)
-        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long).to(fused.device)
-    
-        return self.decoder.generate(
-            inputs_embeds=fused,
-            attention_mask=fusion_mask,
-            max_length=max_length,
-            pad_token_id=self.decoder_tokenizer.pad_token_id,
-            eos_token_id=self.decoder_tokenizer.eos_token_id
+    def generate(self, pixel_values, input_ids, attention_mask=None, **gen_kwargs):
+        """Wrapper for inference, returns token IDs
+        
+        Args:
+            pixel_values: image tensor
+            input_ids: question tokens
+            attention_mask: attention mask
+            **gen_kwargs: additional generation arguments
+            
+        Returns:
+            Generated token IDs
+        """
+        return self.forward(
+            pixel_values=pixel_values,
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            labels=None,
+            **gen_kwargs
         )
-
-
