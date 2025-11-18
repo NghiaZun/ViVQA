@@ -1,8 +1,7 @@
-# eval_distill_student_batch_fixed_full.py
+# eval_distill_student_fixed.py
 """
 Batch evaluation for VQA student model (ViVQA test set)
-Supports GPU batch processing for faster inference.
-Fixes issues with logits argmax and pixel_values squeeze.
+Supports GPU batch processing for faster inference
 """
 import os
 import re
@@ -12,8 +11,8 @@ import pandas as pd
 import numpy as np
 from tqdm import tqdm
 from PIL import Image
-from torch.utils.data import Dataset, DataLoader
 from transformers import BlipProcessor
+from torch.utils.data import Dataset, DataLoader
 from rouge_score import rouge_scorer, scoring
 
 from model import VQAGenModel
@@ -24,7 +23,7 @@ from model import VQAGenModel
 TEST_CSV = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_BASE = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
 STUDENT_CHECKPOINT = "/kaggle/input/final/transformers/default/1/vqa_student_best_multiKD.pt"
-OUTPUT_CSV = "/kaggle/working/eval_student_batch_fixed_full.csv"
+OUTPUT_CSV = "/kaggle/working/eval_student_batch_fixed.csv"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 BATCH_SIZE = 8
@@ -32,14 +31,14 @@ MAX_SEQ_LEN = 128
 MAX_GEN_LEN = 64
 
 # -------------------------
-# Utils
+# Utils: normalization / token-f1
 # -------------------------
 def normalize_text(s: str) -> str:
     if s is None:
         return ""
     s = s.lower().strip()
     s = unicodedata.normalize("NFC", s)
-    s = re.sub(r"[^\w\sàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ\?\!\.,]", "", s)
+    s = re.sub(r"[^\w\sàáảãạăắằẳẵặâấầẩẫậèéẻẽẹêếềểễệìíỉĩịòóỏõọôốồổỗộơớờởỡợùúủũụưứừửữựỳýỷỹỵđ]", "", s)
     s = re.sub(r"\s+", " ", s).strip()
     return s
 
@@ -113,7 +112,7 @@ class VQABatchDataset(Dataset):
             img_pil = Image.open(row["image_path"]).convert("RGB")
         except Exception:
             img_pil = Image.new("RGB", (224,224), (255,255,255))
-        pix = self.processor(images=img_pil, return_tensors="pt").pixel_values  # keep batch dim
+        pix = self.processor(images=img_pil, return_tensors="pt").pixel_values.squeeze(0)  # FIXED
         return {
             "pixel_values": pix,
             "input_ids": q_enc["input_ids"].squeeze(0),
@@ -158,7 +157,7 @@ records = []
 print("[INFO] Starting batch evaluation...")
 with torch.no_grad():
     for batch in tqdm(loader):
-        pix = batch["pixel_values"].to(DEVICE)
+        pix = batch["pixel_values"].to(DEVICE)  # [B,3,H,W]
         input_ids = batch["input_ids"].to(DEVICE)
         attention_mask = batch["attention_mask"].to(DEVICE)
         gts = batch["ground_truth"]
@@ -172,11 +171,12 @@ with torch.no_grad():
             attention_mask=attention_mask,
             max_length=MAX_GEN_LEN,
             num_beams=4,
+            early_stopping=True
         )
-        stu_texts = [decoder_tokenizer.decode(g, skip_special_tokens=True) for g in generated_ids]
 
         # Decode & compute metrics
-        for i, stu_text in enumerate(stu_texts):
+        for i, ids in enumerate(generated_ids):
+            stu_text = decoder_tokenizer.decode(ids, skip_special_tokens=True) if ids is not None else ""
             stu_ex = parse_vqa_xml(stu_text)
             if stu_ex["answer"] == "" and stu_text.strip():
                 stu_ex["answer"] = stu_text.strip()
