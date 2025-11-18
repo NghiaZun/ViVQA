@@ -1,7 +1,7 @@
-# eval_distill_student_batch.py
+# eval_distill_student_batch_fixed.py
 """
 Batch evaluation for VQA student model (ViVQA test set)
-Supports GPU batch processing with padded sequences for faster inference
+Supports GPU batch processing for faster inference
 """
 import os
 import re
@@ -14,7 +14,6 @@ from PIL import Image
 from transformers import BlipProcessor
 from torch.utils.data import Dataset, DataLoader
 from rouge_score import rouge_scorer, scoring
-from torch.nn.utils.rnn import pad_sequence
 
 from model import VQAGenModel
 
@@ -24,10 +23,11 @@ from model import VQAGenModel
 TEST_CSV = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_BASE = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
 STUDENT_CHECKPOINT = "/kaggle/input/final/transformers/default/1/vqa_student_best_multiKD.pt"
-OUTPUT_CSV = "/kaggle/working/eval_student_batch.csv"
+OUTPUT_CSV = "/kaggle/working/eval_student_batch_fixed.csv"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 BATCH_SIZE = 8  # tăng lên 16 nếu GPU đủ
+MAX_SEQ_LEN = 128
 MAX_GEN_LEN = 64
 
 # -------------------------
@@ -90,12 +90,13 @@ def parse_vqa_xml(output_text: str):
 # Dataset
 # -------------------------
 class VQABatchDataset(Dataset):
-    def __init__(self, csv_file, image_base, processor, tokenizer):
+    def __init__(self, csv_file, image_base, processor, tokenizer, max_len=MAX_SEQ_LEN):
         self.df = pd.read_csv(csv_file)
         if "image_path" not in self.df.columns:
             self.df["image_path"] = self.df["img_id"].apply(lambda x: os.path.join(image_base, f"{x}.jpg"))
         self.processor = processor
         self.tokenizer = tokenizer
+        self.max_len = max_len
         self.df["ground_truth"] = self.df["answer"].astype(str) if "answer" in self.df.columns else ""
 
     def __len__(self):
@@ -103,7 +104,10 @@ class VQABatchDataset(Dataset):
 
     def __getitem__(self, idx):
         row = self.df.iloc[idx]
-        q_enc = self.tokenizer(row["question"], truncation=True, return_tensors="pt")
+        q_enc = self.tokenizer(
+            row["question"], truncation=True, max_length=self.max_len,
+            padding="max_length", return_tensors="pt"
+        )
         try:
             img_pil = Image.open(row["image_path"]).convert("RGB")
         except Exception:
@@ -119,25 +123,6 @@ class VQABatchDataset(Dataset):
         }
 
 # -------------------------
-# Collate function (pad variable-length sequences)
-# -------------------------
-def collate_fn(batch):
-    pixel_values = torch.stack([b["pixel_values"] for b in batch])
-    input_ids = pad_sequence([b["input_ids"] for b in batch], batch_first=True, padding_value=0)
-    attention_mask = pad_sequence([b["attention_mask"] for b in batch], batch_first=True, padding_value=0)
-    ground_truth = [b["ground_truth"] for b in batch]
-    img_ids = [b["img_id"] for b in batch]
-    questions = [b["question"] for b in batch]
-    return {
-        "pixel_values": pixel_values,
-        "input_ids": input_ids,
-        "attention_mask": attention_mask,
-        "ground_truth": ground_truth,
-        "img_id": img_ids,
-        "question": questions
-    }
-
-# -------------------------
 # Load student model
 # -------------------------
 print("[INFO] Loading student model...")
@@ -149,6 +134,7 @@ else:
     student.load_state_dict(ck)
 student.to(DEVICE)
 student.eval()
+
 q_tokenizer = student.text_tokenizer
 decoder_tokenizer = student.decoder_tokenizer
 processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
@@ -157,7 +143,7 @@ processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 # DataLoader
 # -------------------------
 dataset = VQABatchDataset(TEST_CSV, IMAGE_BASE, processor, q_tokenizer)
-loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False, collate_fn=collate_fn)
+loader = DataLoader(dataset, batch_size=BATCH_SIZE, shuffle=False)
 
 # -------------------------
 # Rouge scorer
@@ -178,19 +164,12 @@ with torch.no_grad():
         img_ids = batch["img_id"]
         questions = batch["question"]
 
-        # Generate student outputs
-        out_ids = student.generate(pixel_values=pix,
-                                   input_ids=input_ids,
-                                   attention_mask=attention_mask,
-                                   max_new_tokens=MAX_GEN_LEN,
-                                   do_sample=False)
+        # Generate student outputs using greedy decoding
+        logits = student(pixel_values=pix, input_ids=input_ids, attention_mask=attention_mask)
+        # logits shape: [B, seq_len, vocab] -> take argmax
+        out_ids = logits.argmax(-1).cpu().tolist()
 
-        # Decode outputs
-        if isinstance(out_ids, torch.Tensor):
-            out_ids = out_ids.cpu().tolist()
-        elif isinstance(out_ids, (list, tuple)):
-            out_ids = [o.cpu().tolist() if torch.is_tensor(o) else o for o in out_ids]
-
+        # Decode & compute metrics
         for i, ids in enumerate(out_ids):
             stu_text = decoder_tokenizer.decode(ids, skip_special_tokens=True) if ids else ""
             stu_ex = parse_vqa_xml(stu_text)
@@ -225,7 +204,7 @@ print(f"Student EM (answer): {df_out['student_em_answer'].mean():.4f}")
 print(f"Student ROUGE-1: {df_out['student_rouge1'].mean():.4f}")
 print(f"Student TokenF1: {df_out['student_tokenF1'].mean():.4f}")
 
-print("\nSample predictions:")
+# Sample predictions
 for i in range(min(5,len(df_out))):
     r = df_out.iloc[i]
     print(f"{r.img_id} Q:{r.question}")
