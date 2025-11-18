@@ -124,22 +124,26 @@ class VQAGenModel(nn.Module):
                 eos_token_id=self.decoder_tokenizer.eos_token_id
             )
 
-    def generate(self, pixel_values, input_ids, attention_mask=None, **gen_kwargs):
-        """Wrapper for inference, returns token IDs
-        
-        Args:
-            pixel_values: image tensor
-            input_ids: question tokens
-            attention_mask: attention mask
-            **gen_kwargs: additional generation arguments
-            
-        Returns:
-            Generated token IDs
-        """
-        return self.forward(
-            pixel_values=pixel_values,
-            input_ids=input_ids,
-            attention_mask=attention_mask,
-            labels=None,
-            **gen_kwargs
+    def generate(self, pixel_values, input_ids, attention_mask=None, max_length=32, num_beams=4):
+        """Wrapper for autoregressive generation"""
+        # Forward to get fused embeddings
+        vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
+        vision_feats = vision_out.mean(dim=1)  # (B, hidden_dim)
+    
+        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
+        text_feats = text_out[:,0,:]  # CLS
+    
+        fused = torch.cat([vision_feats, text_feats], dim=-1)
+        fused = self.fusion(fused).unsqueeze(1)  # (B,1,hidden_dim)
+        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long, device=fused.device)
+    
+        # Generate autoregressively
+        return self.decoder.generate(
+            inputs_embeds=fused,
+            attention_mask=fusion_mask,
+            max_length=max_length,
+            num_beams=num_beams,
+            early_stopping=True,
+            pad_token_id=self.decoder_tokenizer.pad_token_id,
+            eos_token_id=self.decoder_tokenizer.eos_token_id
         )
