@@ -38,7 +38,7 @@ from model import VQAGenModel
 # -------------------------
 TEST_CSV = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_BASE = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
-STUDENT_CHECKPOINT = "/kaggle/input/checkpoints_2/transformers/default/1/checkpoints/vqa_student_best_multiKD.pt"
+STUDENT_CHECKPOINT = "/kaggle/input/final/transformers/default/1/vqa_student_best_multiKD.pt"
 OUTPUT_CSV = "/kaggle/working/eval_distill_results_xml.csv"
 TEACHER_MODEL = "Qwen2-7b-Instruction"  # set to None to skip teacher
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
