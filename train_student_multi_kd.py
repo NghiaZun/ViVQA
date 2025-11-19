@@ -168,14 +168,14 @@ for epoch in range(start_epoch, EPOCHS):
         batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
 
         with torch.cuda.amp.autocast():
-            ce_loss_full, _ = model(
+            ce_loss_full = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
             )
 
-            ce_loss_reason, _ = model(
+            ce_loss_reason = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
@@ -183,7 +183,7 @@ for epoch in range(start_epoch, EPOCHS):
             )
             ce_loss_reason *= batch_t["reasoning_weight"].mean()
 
-            ce_loss_answer, _ = model(
+            ce_loss_answer = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
@@ -221,20 +221,20 @@ for epoch in range(start_epoch, EPOCHS):
     with torch.no_grad():
         for batch in val_loader:
             batch_t = {k: v.to(device) for k, v in batch.items() if torch.is_tensor(v)}
-            ce_loss_full, _ = model(
+            ce_loss_full = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
             )
-            ce_loss_reason, _ = model(
+            ce_loss_reason = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["reason_ids"]
             )
             ce_loss_reason *= batch_t["reasoning_weight"].mean()
-            ce_loss_answer, _ = model(
+            ce_loss_answer = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
