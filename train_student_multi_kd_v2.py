@@ -104,8 +104,8 @@ class DistillDataset(Dataset):
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 ).to(device)
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
@@ -147,7 +147,7 @@ if not os.path.exists(LOG_CSV):
 # LOAD BEST CHECKPOINT
 # =====================
 print("[INFO] Loading BEST model...")
-best_ckpt = torch.load("/kaggle/input/v3/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
+best_ckpt = torch.load("/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt", map_location=device)
 model.load_state_dict(best_ckpt)
 print("[INFO] BEST model loaded.")
 
