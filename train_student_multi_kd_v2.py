@@ -18,7 +18,7 @@ from contextlib import nullcontext
 # =====================
 # CONFIG (unchanged)
 # =====================
-DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
+DATA_PATH = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
 SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
