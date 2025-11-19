@@ -124,26 +124,43 @@ class VQAGenModel(nn.Module):
                 eos_token_id=self.decoder_tokenizer.eos_token_id
             )
 
-    def generate(self, pixel_values, input_ids, attention_mask=None, max_length=32, num_beams=4):
-        """Wrapper for autoregressive generation"""
-        # Forward to get fused embeddings
+    def generate(
+        self,
+        pixel_values,
+        input_ids,
+        attention_mask,
+        max_new_tokens=32,
+        num_beams=1,
+        early_stopping=True,
+        **kwargs
+    ):
+        """
+        Unified HuggingFace-style generation API.
+        Accepts max_new_tokens, num_beams, early_stopping like normal models.
+        """
+    
+        # Encode image
         vision_out = self.vision_encoder(pixel_values=pixel_values).last_hidden_state
-        vision_feats = vision_out.mean(dim=1)  # (B, hidden_dim)
-    
-        text_out = self.text_encoder(input_ids=input_ids, attention_mask=attention_mask).last_hidden_state
-        text_feats = text_out[:,0,:]  # CLS
-    
-        fused = torch.cat([vision_feats, text_feats], dim=-1)
-        fused = self.fusion(fused).unsqueeze(1)  # (B,1,hidden_dim)
-        fusion_mask = torch.ones(fused.shape[:-1], dtype=torch.long, device=fused.device)
-    
-        # Generate autoregressively
-        return self.decoder.generate(
-            inputs_embeds=fused,
-            attention_mask=fusion_mask,
-            max_length=max_length,
-            num_beams=num_beams,
-            early_stopping=True,
-            pad_token_id=self.decoder_tokenizer.pad_token_id,
-            eos_token_id=self.decoder_tokenizer.eos_token_id
+        encoder_outputs = self.text_encoder(
+            input_ids=input_ids,
+            attention_mask=attention_mask,
+            encoder_hidden_states=vision_out,
+            encoder_attention_mask=torch.ones(vision_out.size()[:-1], device=vision_out.device)
         )
+    
+        # The T5 decoder expects encoder_outputs as ModelOutput
+        class Dummy:
+            pass
+    
+        enc = Dummy()
+        enc.last_hidden_state = encoder_outputs.last_hidden_state
+    
+        # T5 generate()
+        outputs = self.text_decoder.generate(
+            encoder_outputs=enc,
+            max_new_tokens=max_new_tokens,
+            num_beams=num_beams,
+            early_stopping=early_stopping,
+        )
+    
+        return outputs
