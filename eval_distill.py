@@ -170,8 +170,7 @@ with torch.no_grad():
             input_ids=input_ids,
             attention_mask=attention_mask,
             max_length=MAX_GEN_LEN,
-            num_beams=4,
-            early_stopping=True
+            num_beams=4
         )
 
         # Decode & compute metrics
