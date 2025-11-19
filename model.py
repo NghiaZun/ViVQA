@@ -122,7 +122,7 @@ class VQAGenModel(nn.Module):
         pixel_values,
         input_ids,
         attention_mask,
-        max_new_tokens=32,
+        max_new_tokens=96,
         num_beams=4,
         early_stopping=True,
         **kwargs
