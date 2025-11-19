@@ -22,7 +22,6 @@ SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
 FINAL_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_final_multiKD.pt")
-RESUME_PATH = os.path.join(SAVE_DIR, "resume_state.pth")
 
 EPOCHS = 60
 LR = 1e-5
@@ -111,6 +110,14 @@ model = VQAGenModel(
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
+# ---------------------
+# LOAD BEST MODEL
+# ---------------------
+if os.path.exists(BEST_MODEL_PATH):
+    print("[INFO] Loading BEST_MODEL to continue training...")
+    model.load_state_dict(torch.load("/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/best_model.pth", map_location=device))
+    print("[INFO] BEST_MODEL loaded.")
+
 # =====================
 # DATASET & SPLIT
 # =====================
@@ -145,21 +152,6 @@ ce_loss_fn = torch.nn.CrossEntropyLoss(ignore_index=model.decoder_tokenizer.pad_
 best_loss = float("inf")
 early_stop_counter = 0
 start_epoch = 0
-
-# ---------------------
-# RESUME CHECKPOINT
-# ---------------------
-if os.path.exists(RESUME_PATH):
-    print("[INFO] Resuming training from previous checkpoint...")
-    ckpt = torch.load(RESUME_PATH, map_location=device)
-    model.load_state_dict(ckpt["model"])
-    optimizer.load_state_dict(ckpt["optimizer"])
-    scheduler.load_state_dict(ckpt["scheduler"])
-    scaler.load_state_dict(ckpt["scaler"])
-    start_epoch = ckpt["epoch"] + 1
-    best_loss = ckpt["best_loss"]
-    early_stop_counter = ckpt["early_stop_counter"]
-    print(f"[INFO] Resumed at epoch {start_epoch}")
 
 # =====================
 # TRAIN LOOP
@@ -262,20 +254,6 @@ for epoch in range(start_epoch, EPOCHS):
 
     print(f"[INFO] Epoch {epoch+1} | Train: {avg_loss:.4f} | F={avg_f:.4f}, R={avg_r:.4f}, A={avg_a:.4f} "
           f"| Val: {avg_val:.4f} | F={avg_val_f:.4f}, R={avg_val_r:.4f}, A={avg_val_a:.4f}")
-
-    # -------------------------
-    # Save RESUME checkpoint
-    # -------------------------
-    resume_state = {
-        "epoch": epoch,
-        "model": model.state_dict(),
-        "optimizer": optimizer.state_dict(),
-        "scheduler": scheduler.state_dict(),
-        "scaler": scaler.state_dict(),
-        "best_loss": best_loss,
-        "early_stop_counter": early_stop_counter
-    }
-    torch.save(resume_state, RESUME_PATH)
 
     # --------------------------
     # Save BEST MODEL
