@@ -17,7 +17,7 @@ import random
 # =====================
 # CONFIG
 # =====================
-DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs.jsonl"
+DATA_PATH = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
 SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_multiKD.pt")
@@ -105,8 +105,8 @@ class DistillDataset(Dataset):
 print("[INFO] Loading VQAGenModel...")
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 ).to(device)
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
