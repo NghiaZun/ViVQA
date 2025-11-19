@@ -173,14 +173,14 @@ for epoch in range(start_epoch, EPOCHS):
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
-            )
+            ).loss
 
             ce_loss_reason = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["reason_ids"]
-            )
+            ).loss
             ce_loss_reason *= batch_t["reasoning_weight"].mean()
 
             ce_loss_answer = model(
@@ -188,7 +188,7 @@ for epoch in range(start_epoch, EPOCHS):
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["answer_ids"]
-            )
+            ).loss
 
             loss_total = (
                 W_FORMAT * ce_loss_full +
@@ -226,20 +226,20 @@ for epoch in range(start_epoch, EPOCHS):
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["teacher_ids"]
-            )
+            ).loss
             ce_loss_reason = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["reason_ids"]
-            )
+            ).loss
             ce_loss_reason *= batch_t["reasoning_weight"].mean()
             ce_loss_answer = model(
                 pixel_values=batch_t["pixel_values"],
                 input_ids=batch_t["input_ids"],
                 attention_mask=batch_t["attention_mask"],
                 labels=batch_t["answer_ids"]
-            )
+            ).loss
 
             val_loss = W_FORMAT * ce_loss_full + W_REASON * ce_loss_reason + W_ANSWER * ce_loss_answer
             val_total += val_loss.item()
