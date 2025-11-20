@@ -42,6 +42,10 @@ MAX_A_LEN = 160
 EARLY_STOP_PATIENCE = 15
 accum_steps = 3  # Increased to maintain effective batch size of 9
 
+# Resume training
+RESUME_FROM = None  # e.g., "/kaggle/input/my-checkpoint/latest_checkpoint.pt"
+AUTO_CHECKPOINT_PATH = os.path.join(SAVE_DIR, "latest_checkpoint.pt")  # Auto-saved every epoch
+
 # Memory optimization flags
 USE_GRADIENT_CHECKPOINTING = True
 EMPTY_CACHE_EVERY_N_STEPS = 50
@@ -265,18 +269,41 @@ print_gpu_memory()
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
 # Load checkpoint if exists (set to None if training from scratch)
-CHECKPOINT_PATH = None  # or "/kaggle/input/YOUR-CHECKPOINT-DATASET/vqa_student_best_multiKD.pt"
-if CHECKPOINT_PATH and os.path.exists(CHECKPOINT_PATH):
-    print(f"[INFO] Loading checkpoint: {CHECKPOINT_PATH}")
-    checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu')  # Load to CPU first
-    model.load_state_dict(checkpoint)
-    del checkpoint  # Free memory
+# Resume training state
+start_epoch = 0
+best_val_loss = float('inf')
+early_stop_counter = 0
+
+if RESUME_FROM and os.path.exists(RESUME_FROM):
+    print(f"[INFO] 🔄 Resuming from checkpoint: {RESUME_FROM}")
+    checkpoint = torch.load(RESUME_FROM, map_location='cpu')
+    model.load_state_dict(checkpoint['model_state_dict'])
+    start_epoch = checkpoint.get('epoch', 0) + 1  # Continue from next epoch
+    best_val_loss = checkpoint.get('best_val_loss', float('inf'))
+    early_stop_counter = checkpoint.get('early_stop_counter', 0)
+    print(f"[INFO] ✅ Resuming from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
+    del checkpoint
     clear_memory()
-    print("[INFO] Checkpoint loaded.")
     print_gpu_memory()
 
 # Initialize format-aware loss
 format_loss_fn = FormatAwareLoss(model.decoder_tokenizer, format_token_weight=2.5)
+
+# Optimizer & Scheduler
+optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+scheduler = torch.optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=EPOCHS, eta_min=1e-7)
+
+# Load optimizer/scheduler state if resuming
+if RESUME_FROM and os.path.exists(RESUME_FROM):
+    checkpoint = torch.load(RESUME_FROM, map_location='cpu')
+    if 'optimizer_state_dict' in checkpoint:
+        optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
+        print("[INFO] ✅ Optimizer state restored")
+    if 'scheduler_state_dict' in checkpoint:
+        scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
+        print("[INFO] ✅ Scheduler state restored")
+    del checkpoint
+    clear_memory()
 
 # =====================
 # DATASET & DATALOADERS
@@ -313,15 +340,10 @@ print(f"[INFO] Effective batch size: {BATCH_SIZE * accum_steps}")
 print(f"[INFO] Steps per epoch: {len(train_loader) // accum_steps}")
 
 # =====================
-# OPTIMIZER & SCHEDULER
+# OPTIMIZER & SCHEDULER (already initialized above with resume support)
 # =====================
-optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=0.01)
-
-# Cosine schedule with warm restarts
-scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-    optimizer, T_0=15, T_mult=2, eta_min=1e-7
-)
-
+# optimizer and scheduler are already created earlier with checkpoint loading
+# Just update the scaler
 scaler = torch.cuda.amp.GradScaler()
 
 # =====================
@@ -382,16 +404,18 @@ def compute_curriculum_loss(model, batch, weights, use_format_aware=True):
 # =====================
 # TRAINING LOOP
 # =====================
-best_val_loss = float("inf")
-early_stop_counter = 0
+# best_val_loss and early_stop_counter already initialized at the top with resume support
 autocast_ctx = torch.cuda.amp.autocast if device == "cuda" else nullcontext
 
 print(f"\n[INFO] Starting curriculum training for {EPOCHS} epochs...")
 print(f"[INFO] Stage 1 (0-{STAGE_1_EPOCHS}): Answer Focus")
 print(f"[INFO] Stage 2 ({STAGE_1_EPOCHS}-{STAGE_2_EPOCHS}): Format Learning")
-print(f"[INFO] Stage 3 ({STAGE_2_EPOCHS}+): Reasoning Quality\n")
+print(f"[INFO] Stage 3 ({STAGE_2_EPOCHS}+): Reasoning Quality")
+if start_epoch > 0:
+    print(f"[INFO] \ud83d\udd04 Resuming from epoch {start_epoch+1}/{EPOCHS}")
+print()
 
-for epoch in range(EPOCHS):
+for epoch in range(start_epoch, EPOCHS):
     # Clear memory at start of epoch
     clear_memory()
     
@@ -486,6 +510,18 @@ for epoch in range(EPOCHS):
     scheduler.step()
     
     # =================== CHECKPOINTING ===================
+    # Save auto-checkpoint every epoch for resume capability
+    torch.save({
+        'epoch': epoch,
+        'model_state_dict': model.state_dict(),
+        'optimizer_state_dict': optimizer.state_dict(),
+        'scheduler_state_dict': scheduler.state_dict(),
+        'best_val_loss': best_val_loss,
+        'early_stop_counter': early_stop_counter,
+        'train_loss': train_loss,
+        'val_loss': val_loss
+    }, AUTO_CHECKPOINT_PATH)
+    
     if val_loss < best_val_loss - 1e-4:
         best_val_loss = val_loss
         early_stop_counter = 0
@@ -495,10 +531,17 @@ for epoch in range(EPOCHS):
         early_stop_counter += 1
         print(f"⚠️  No improvement ({early_stop_counter}/{EARLY_STOP_PATIENCE})")
     
-    # Periodic checkpoints
+    # Periodic checkpoints (backup every 10 epochs)
     if (epoch + 1) % 10 == 0 or epoch in [STAGE_1_EPOCHS-1, STAGE_2_EPOCHS-1]:
         checkpoint_path = os.path.join(SAVE_DIR, f"checkpoint_epoch{epoch+1}.pt")
-        torch.save(model.state_dict(), checkpoint_path)
+        torch.save({
+            'epoch': epoch,
+            'model_state_dict': model.state_dict(),
+            'optimizer_state_dict': optimizer.state_dict(),
+            'scheduler_state_dict': scheduler.state_dict(),
+            'best_val_loss': best_val_loss,
+            'early_stop_counter': early_stop_counter
+        }, checkpoint_path)
         print(f"💾 Checkpoint saved: checkpoint_epoch{epoch+1}.pt")
     
     if early_stop_counter >= EARLY_STOP_PATIENCE:
