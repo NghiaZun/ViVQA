@@ -1,0 +1,105 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+pip-wheel-metadata/
+share/python-wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Virtual Environment
+venv/
+env/
+ENV/
+env.bak/
+venv.bak/
+
+# PyTorch
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+checkpoints/
+checkpoint_epoch*.pt
+vqa_student_*.pt
+
+# Jupyter Notebook
+.ipynb_checkpoints
+*.ipynb
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.DS_Store
+
+# Logs
+*.log
+*.csv
+train_log.csv
+train_val_log*.csv
+eval_*.csv
+
+# Data
+kaggle/drive-download-20220309T020508Z-001/train/*.jpg
+kaggle/drive-download-20220309T020508Z-001/test/*.jpg
+*.jpg
+*.jpeg
+*.png
+*.gif
+*.bmp
+*.tiff
+
+# Large files
+*.jsonl
+teacher_outputs.jsonl
+kaggle/teacher_outputs.jsonl
+*.csv
+vqa_predictions*.csv
+
+# Cache
+.cache/
+*.cache
+transformers_cache/
+
+# Output
+/kaggle/working/
+outputs/
+results/
+predictions/
+
+# Temporary files
+*.tmp
+*.temp
+temp/
+tmp/
+
+# System files
+Thumbs.db
+desktop.ini
+
+# Documentation output
+*.pdf
+*.docx
+training_progress.png
+evaluation_results.png
+model_comparison.png
