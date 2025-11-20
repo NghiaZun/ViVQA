@@ -18,8 +18,8 @@ paths_config = {
     "📊 Train CSV": "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv",
     "🖼️ Train Images": "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train",
     "🖼️ Test Images": "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test",
-    "🤖 PhoBERT Tokenizer": "/kaggle/input/base/transformers/default/1/phobert_tokenizer",
-    "🤖 VietT5 Tokenizer": "/kaggle/input/base/transformers/default/1/vit5_tokenizer",
+    "🤖 PhoBERT Tokenizer": "/kaggle/input/base/transformers/default/1/checkpoints/phobert_tokenizer",
+    "🤖 VietT5 Tokenizer": "/kaggle/input/base/transformers/default/1/checkpoints/vit5_tokenizer",
     "💾 Output Directory": "/kaggle/working"
 }
 

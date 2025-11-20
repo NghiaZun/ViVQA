@@ -249,8 +249,8 @@ clear_memory()  # Clear before loading
 
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/base/transformers/default/1/phobert_tokenizer",
-    vit5_dir="/kaggle/input/base/transformers/default/1/vit5_tokenizer"
+    phobert_dir="/kaggle/input/base/transformers/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/base/transformers/default/1/checkpoints/vit5_tokenizer"
 )
 
 # Enable gradient checkpointing for memory efficiency
