@@ -74,11 +74,30 @@ class VQAGenModel(nn.Module):
         else:
             self.decoder = AutoModelForSeq2SeqLM.from_pretrained(vit5_dir)
 
+        # Load decoder tokenizer
         try:
             self.decoder_tokenizer = AutoTokenizer.from_pretrained(vit5_dir, use_fast=False)
         except:
             print("[WARN] VietT5 tokenizer fallback → HF")
             self.decoder_tokenizer = AutoTokenizer.from_pretrained("VietAI/vit5-base", use_fast=False)
+
+        # --------------------------------------------------------------------
+        #  🔥 ADD SPECIAL TOKENS (IMPORTANT!)
+        # --------------------------------------------------------------------
+        special_tokens = [
+            "<answer>", "</answer>",
+            "<reasoning>", "</reasoning>",
+            "[DESCRIPTIVE]", "[CAUSAL]", "[NEUTRAL]", "[OBJECT-BASED]",
+            "[SPATIAL]", "[COUNTING]", "[COMMONSENSE]", "[INTENT]"
+        ]
+
+        added = self.decoder_tokenizer.add_special_tokens(
+            {"additional_special_tokens": special_tokens}
+        )
+
+        if added > 0:
+            print(f"[INFO] Added {added} special tokens → resizing decoder embeddings…")
+            self.decoder.resize_token_embeddings(len(self.decoder_tokenizer))
 
     # ===================================================================
     # FORWARD (training)
