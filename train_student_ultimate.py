@@ -26,7 +26,7 @@ import gc
 # =====================
 # CONFIG - OPTIMIZED FOR KAGGLE GPU
 # =====================
-DATA_PATH = "/kaggle/input/teacher-checkpoint-11k/teacher_outputs.jsonl"
+DATA_PATH = "/kaggle/input/teacher-outputs/teacher_outputs.jsonl"
 SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_student_best_ultimate.pt")
@@ -249,8 +249,8 @@ clear_memory()  # Clear before loading
 
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/base/transformers/default/1/phobert_tokenizer",
+    vit5_dir="/kaggle/input/base/transformers/default/1/vit5_tokenizer"
 )
 
 # Enable gradient checkpointing for memory efficiency
@@ -264,9 +264,9 @@ print_gpu_memory()
 
 vision_processor = BlipProcessor.from_pretrained("Salesforce/blip-vqa-base")
 
-# Load checkpoint if exists
-CHECKPOINT_PATH = "/kaggle/input/v2/transformers/default/1/vqa_student_best_multiKD.pt"
-if os.path.exists(CHECKPOINT_PATH):
+# Load checkpoint if exists (set to None if training from scratch)
+CHECKPOINT_PATH = None  # or "/kaggle/input/YOUR-CHECKPOINT-DATASET/vqa_student_best_multiKD.pt"
+if CHECKPOINT_PATH and os.path.exists(CHECKPOINT_PATH):
     print(f"[INFO] Loading checkpoint: {CHECKPOINT_PATH}")
     checkpoint = torch.load(CHECKPOINT_PATH, map_location='cpu')  # Load to CPU first
     model.load_state_dict(checkpoint)

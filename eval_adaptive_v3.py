@@ -21,7 +21,7 @@ from model import VQAGenModel
 # -------------------------
 TEST_CSV = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
 IMAGE_BASE = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
-STUDENT_CHECKPOINT = "/kaggle/working/vqa_student_best_adaptive_v3.pt"
+STUDENT_CHECKPOINT = "/kaggle/working/vqa_student_best_adaptive_v3.pt"  # or vqa_student_best_ultimate.pt
 OUTPUT_CSV = "/kaggle/working/eval_adaptive_v3_results.csv"
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
@@ -193,8 +193,8 @@ clear_memory()
 
 student = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/base-checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/base/transformers/default/1/phobert_tokenizer",
+    vit5_dir="/kaggle/input/base/transformers/default/1/vit5_tokenizer"
 )
 
 print("[INFO] Loading checkpoint...")
