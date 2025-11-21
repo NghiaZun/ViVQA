@@ -43,7 +43,7 @@ EARLY_STOP_PATIENCE = 15
 accum_steps = 3  # Increased to maintain effective batch size of 9
 
 # Resume training
-RESUME_FROM = None  # e.g., "/kaggle/input/my-checkpoint/latest_checkpoint.pt"
+RESUME_FROM = "/kaggle/input/vivqa-checkpoint/transformers/default/1/latest_checkpoint.pt"
 AUTO_CHECKPOINT_PATH = os.path.join(SAVE_DIR, "latest_checkpoint.pt")  # Auto-saved every epoch
 
 # Memory optimization flags
@@ -521,6 +521,8 @@ for epoch in range(start_epoch, EPOCHS):
         'train_loss': train_loss,
         'val_loss': val_loss
     }, AUTO_CHECKPOINT_PATH)
+    print(f"💾 Auto-checkpoint saved: latest_checkpoint.pt")
+    print(f"   📍 Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f} | Early Stop: {early_stop_counter}/{EARLY_STOP_PATIENCE}")
     
     if val_loss < best_val_loss - 1e-4:
         best_val_loss = val_loss
@@ -542,7 +544,8 @@ for epoch in range(start_epoch, EPOCHS):
             'best_val_loss': best_val_loss,
             'early_stop_counter': early_stop_counter
         }, checkpoint_path)
-        print(f"💾 Checkpoint saved: checkpoint_epoch{epoch+1}.pt")
+        print(f"📦 Backup checkpoint saved: checkpoint_epoch{epoch+1}.pt")
+        print(f"   📍 Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f}")
     
     if early_stop_counter >= EARLY_STOP_PATIENCE:
         print(f"\n⛔ Early stopping triggered at epoch {epoch+1}")
