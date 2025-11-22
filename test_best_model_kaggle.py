@@ -59,7 +59,7 @@ with torch.no_grad():
     for idx, sample_idx in enumerate(sample_indices, 1):
         row = test_df.iloc[sample_idx]
         
-        img_path = f"{TEST_IMG_DIR}/{row['img_id']}"
+        img_path = f"{TEST_IMG_DIR}/{row['img_id']}.jpg"
         question = row['question']
         
         try:
