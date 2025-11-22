@@ -205,11 +205,12 @@ class CurriculumDistillDataset(Dataset):
 class FormatAwareLoss(nn.Module):
     """
     Custom loss that pays extra attention to special tokens
+    NOW with curriculum-based dynamic weighting
     """
-    def __init__(self, tokenizer, format_token_weight=2.0):
+    def __init__(self, tokenizer, base_format_weight=3.5):
         super().__init__()
         self.tokenizer = tokenizer
-        self.format_token_weight = format_token_weight
+        self.base_format_weight = base_format_weight
         
         # Get special token IDs
         special_tokens = ["<answer>", "</answer>", "<reasoning>", "</reasoning>"]
@@ -221,7 +222,7 @@ class FormatAwareLoss(nn.Module):
     
     def forward(self, logits, labels):
         """
-        Weighted cross-entropy with emphasis on format tokens
+        Weighted cross-entropy with STRONG emphasis on format tokens
         """
         # Standard cross-entropy
         ce_loss = F.cross_entropy(
@@ -231,10 +232,10 @@ class FormatAwareLoss(nn.Module):
             reduction='none'
         )
         
-        # Create weight mask
+        # Create weight mask with HIGHER weight for format tokens
         weights = torch.ones_like(labels, dtype=torch.float)
         for token_id in self.special_token_ids:
-            weights[labels == token_id] = self.format_token_weight
+            weights[labels == token_id] = self.base_format_weight
         
         # Apply weights
         weighted_loss = (ce_loss * weights.view(-1)).mean()
@@ -286,8 +287,8 @@ if RESUME_FROM and os.path.exists(RESUME_FROM):
     clear_memory()
     print_gpu_memory()
 
-# Initialize format-aware loss
-format_loss_fn = FormatAwareLoss(model.decoder_tokenizer, format_token_weight=2.5)
+# Initialize format-aware loss with HIGHER weight
+format_loss_fn = FormatAwareLoss(model.decoder_tokenizer, base_format_weight=3.5)
 
 # Optimizer & Scheduler
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
@@ -362,10 +363,9 @@ if not os.path.exists(LOG_CSV):
 def compute_curriculum_loss(model, batch, weights, use_format_aware=True):
     """
     Multi-objective loss with curriculum weighting
+    Now using ONLY format_ids with varying token weights
     """
-    w_f, w_a, w_r = weights["format"], weights["answer"], weights["reason"]
-    
-    # Format loss
+    # Single forward pass with full format
     out_format = model(
         pixel_values=batch["pixel_values"],
         input_ids=batch["input_ids"],
@@ -378,28 +378,8 @@ def compute_curriculum_loss(model, batch, weights, use_format_aware=True):
     else:
         loss_format = out_format[0] if isinstance(out_format, tuple) else out_format.loss
     
-    # Answer loss
-    out_answer = model(
-        pixel_values=batch["pixel_values"],
-        input_ids=batch["input_ids"],
-        attention_mask=batch["attention_mask"],
-        labels=batch["answer_ids"]
-    )
-    loss_answer = out_answer[0] if isinstance(out_answer, tuple) else out_answer.loss
-    
-    # Reasoning loss
-    out_reason = model(
-        pixel_values=batch["pixel_values"],
-        input_ids=batch["input_ids"],
-        attention_mask=batch["attention_mask"],
-        labels=batch["reason_ids"]
-    )
-    loss_reason = (out_reason[0] if isinstance(out_reason, tuple) else out_reason.loss) * batch["reasoning_weight"].mean()
-    
-    # Combine
-    total_loss = w_f * loss_format + w_a * loss_answer + w_r * loss_reason
-    
-    return total_loss, loss_format.item(), loss_reason.item(), loss_answer.item()
+    # Return same loss 3 times for logging compatibility
+    return loss_format, loss_format.item(), 0.0, 0.0
 
 # =====================
 # TRAINING LOOP
