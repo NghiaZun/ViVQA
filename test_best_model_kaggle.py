@@ -11,7 +11,7 @@ import random
 # =====================
 # CONFIG
 # =====================
-BEST_MODEL_PATH = "/kaggle/working/vqa_student_best_ultimate.pt"
+BEST_MODEL_PATH = "/kaggle/input/v1/transformers/default/1/vqa_student_best_ultimate.pt"
 TEST_CSV = "/kaggle/input/teacher-outputs/ViVQA-main/ViVQA-main/test.csv"
 TEST_IMG_DIR = "/kaggle/input/teacher-outputs/kaggle/drive-download-20220309T020508Z-001/test"
 
