@@ -71,7 +71,7 @@ with torch.no_grad():
             pixel_values = vision_inputs['pixel_values'].to(device)
             
             # Encode question
-            q_inputs = model.phobert_tokenizer(
+            q_inputs = model.text_tokenizer(
                 question,
                 return_tensors="pt",
                 padding=True,
