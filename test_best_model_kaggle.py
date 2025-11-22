@@ -71,19 +71,21 @@ with torch.no_grad():
             pixel_values = vision_inputs['pixel_values'].to(device)
             
             # Encode question
-            q_inputs = model.question_encoder(
+            q_inputs = model.phobert_tokenizer(
                 question,
                 return_tensors="pt",
                 padding=True,
                 truncation=True,
                 max_length=64
-            ).to(device)
+            )
+            q_input_ids = q_inputs['input_ids'].to(device)
+            q_attention_mask = q_inputs['attention_mask'].to(device)
             
             # Generate answer
             outputs = model.generate(
                 pixel_values=pixel_values,
-                input_ids=q_inputs['input_ids'],
-                attention_mask=q_inputs['attention_mask'],
+                input_ids=q_input_ids,
+                attention_mask=q_attention_mask,
                 max_length=160,
                 num_beams=3,
                 early_stopping=True
