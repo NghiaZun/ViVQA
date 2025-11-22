@@ -275,13 +275,13 @@ best_val_loss = float('inf')
 early_stop_counter = 0
 
 if RESUME_FROM and os.path.exists(RESUME_FROM):
-    print(f"[INFO] 🔄 Resuming from checkpoint: {RESUME_FROM}")
+    print(f"[INFO] Resuming from checkpoint: {RESUME_FROM}")
     checkpoint = torch.load(RESUME_FROM, map_location='cpu')
     model.load_state_dict(checkpoint['model_state_dict'])
     start_epoch = checkpoint.get('epoch', 0) + 1  # Continue from next epoch
     best_val_loss = checkpoint.get('best_val_loss', float('inf'))
     early_stop_counter = checkpoint.get('early_stop_counter', 0)
-    print(f"[INFO] ✅ Resuming from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
+    print(f"[INFO] Resuming from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
     del checkpoint
     clear_memory()
     print_gpu_memory()
@@ -298,10 +298,10 @@ if RESUME_FROM and os.path.exists(RESUME_FROM):
     checkpoint = torch.load(RESUME_FROM, map_location='cpu')
     if 'optimizer_state_dict' in checkpoint:
         optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
-        print("[INFO] ✅ Optimizer state restored")
+        print("[INFO] Optimizer state restored")
     if 'scheduler_state_dict' in checkpoint:
         scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
-        print("[INFO] ✅ Scheduler state restored")
+        print("[INFO] Scheduler state restored")
     del checkpoint
     clear_memory()
 
@@ -412,7 +412,7 @@ print(f"[INFO] Stage 1 (0-{STAGE_1_EPOCHS}): Answer Focus")
 print(f"[INFO] Stage 2 ({STAGE_1_EPOCHS}-{STAGE_2_EPOCHS}): Format Learning")
 print(f"[INFO] Stage 3 ({STAGE_2_EPOCHS}+): Reasoning Quality")
 if start_epoch > 0:
-    print(f"[INFO] \ud83d\udd04 Resuming from epoch {start_epoch+1}/{EPOCHS}")
+    print(f"[INFO] Resuming from epoch {start_epoch+1}/{EPOCHS}")
 print()
 
 for epoch in range(start_epoch, EPOCHS):
@@ -493,8 +493,8 @@ for epoch in range(start_epoch, EPOCHS):
     # Clear memory after validation
     clear_memory()
     
-    print(f"\n📊 Train Loss: {train_loss:.4f} (F:{train_f:.4f} | A:{train_a:.4f} | R:{train_r:.4f})")
-    print(f"📊 Val Loss:   {val_loss:.4f} (F:{val_f:.4f} | A:{val_a:.4f} | R:{val_r:.4f})")
+    print(f"\nTrain Loss: {train_loss:.4f} (F:{train_f:.4f} | A:{train_a:.4f} | R:{train_r:.4f})")
+    print(f"Val Loss:   {val_loss:.4f} (F:{val_f:.4f} | A:{val_a:.4f} | R:{val_r:.4f})")
     print_gpu_memory()
     
     # Logging
@@ -521,17 +521,17 @@ for epoch in range(start_epoch, EPOCHS):
         'train_loss': train_loss,
         'val_loss': val_loss
     }, AUTO_CHECKPOINT_PATH)
-    print(f"💾 Auto-checkpoint saved: latest_checkpoint.pt")
-    print(f"   📍 Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f} | Early Stop: {early_stop_counter}/{EARLY_STOP_PATIENCE}")
+    print(f"[CHECKPOINT] Auto-checkpoint saved: latest_checkpoint.pt")
+    print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f} | Early Stop: {early_stop_counter}/{EARLY_STOP_PATIENCE}")
     
     if val_loss < best_val_loss - 1e-4:
         best_val_loss = val_loss
         early_stop_counter = 0
         torch.save(model.state_dict(), BEST_MODEL_PATH)
-        print(f"⭐ NEW BEST MODEL! Val Loss: {best_val_loss:.4f}")
+        print(f"[BEST] NEW BEST MODEL! Val Loss: {best_val_loss:.4f}")
     else:
         early_stop_counter += 1
-        print(f"⚠️  No improvement ({early_stop_counter}/{EARLY_STOP_PATIENCE})")
+        print(f"[WARN] No improvement ({early_stop_counter}/{EARLY_STOP_PATIENCE})")
     
     # Periodic checkpoints (backup every 10 epochs)
     if (epoch + 1) % 10 == 0 or epoch in [STAGE_1_EPOCHS-1, STAGE_2_EPOCHS-1]:
@@ -544,11 +544,11 @@ for epoch in range(start_epoch, EPOCHS):
             'best_val_loss': best_val_loss,
             'early_stop_counter': early_stop_counter
         }, checkpoint_path)
-        print(f"📦 Backup checkpoint saved: checkpoint_epoch{epoch+1}.pt")
-        print(f"   📍 Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f}")
+        print(f"[CHECKPOINT] Backup checkpoint saved: checkpoint_epoch{epoch+1}.pt")
+        print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f}")
     
     if early_stop_counter >= EARLY_STOP_PATIENCE:
-        print(f"\n⛔ Early stopping triggered at epoch {epoch+1}")
+        print(f"\n[STOP] Early stopping triggered at epoch {epoch+1}")
         break
 
 # =====================
@@ -556,7 +556,7 @@ for epoch in range(start_epoch, EPOCHS):
 # =====================
 torch.save(model.state_dict(), FINAL_MODEL_PATH)
 print(f"\n{'='*70}")
-print(f"✅ Training complete!")
-print(f"✅ Best model: {BEST_MODEL_PATH} (Val Loss: {best_val_loss:.4f})")
-print(f"✅ Final model: {FINAL_MODEL_PATH}")
+print(f"[DONE] Training complete!")
+print(f"[DONE] Best model: {BEST_MODEL_PATH} (Val Loss: {best_val_loss:.4f})")
+print(f"[DONE] Final model: {FINAL_MODEL_PATH}")
 print(f"{'='*70}")
