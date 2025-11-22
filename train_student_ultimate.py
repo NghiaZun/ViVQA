@@ -522,7 +522,7 @@ for epoch in range(start_epoch, EPOCHS):
         'val_loss': val_loss
     }, AUTO_CHECKPOINT_PATH)
     print(f"[CHECKPOINT] Auto-checkpoint saved: latest_checkpoint.pt")
-    print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f} | Early Stop: {early_stop_counter}/{EARLY_STOP_PATIENCE}")
+    print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{EPOCHS} | Best Val Loss: {best_val_loss:.4f} | Early Stop: {early_stop_counter}/{EARLY_STOP_PATIENCE}")
     
     if val_loss < best_val_loss - 1e-4:
         best_val_loss = val_loss
@@ -545,7 +545,7 @@ for epoch in range(start_epoch, EPOCHS):
             'early_stop_counter': early_stop_counter
         }, checkpoint_path)
         print(f"[CHECKPOINT] Backup checkpoint saved: checkpoint_epoch{epoch+1}.pt")
-        print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{TOTAL_EPOCHS} | Best Val Loss: {best_val_loss:.4f}")
+        print(f"[CHECKPOINT] Progress: Epoch {epoch+1}/{EPOCHS} | Best Val Loss: {best_val_loss:.4f}")
     
     if early_stop_counter >= EARLY_STOP_PATIENCE:
         print(f"\n[STOP] Early stopping triggered at epoch {epoch+1}")
