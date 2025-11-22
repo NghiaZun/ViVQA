@@ -27,6 +27,10 @@ import numpy as np
 import gc
 import copy
 
+# Check PyTorch version for compatibility
+TORCH_VERSION = tuple(int(x) for x in torch.__version__.split('.')[:2])
+SUPPORTS_LABEL_SMOOTHING = TORCH_VERSION >= (1, 10)  # label_smoothing in F.cross_entropy since 1.10
+
 # =====================
 # CONFIG - OPTIMIZED FOR KAGGLE GPU
 # =====================
@@ -421,48 +425,46 @@ class MultiTaskLoss(nn.Module):
         """
         vocab_size = logits.size(-1)
         
-        # Label smoothing
-        if use_smoothing and self.label_smoothing > 0:
-            # Smooth labels: true_label gets (1-smoothing), others get smoothing/(vocab_size-1)
-            with torch.no_grad():
-                smooth_labels = torch.zeros_like(logits)
-                smooth_labels.fill_(self.label_smoothing / (vocab_size - 1))
-                
-                # Set true label probabilities
-                labels_expanded = labels.unsqueeze(-1)
-                mask = labels_expanded != -100
-                smooth_labels.scatter_(-1, labels_expanded.clamp(min=0), 
-                                      1.0 - self.label_smoothing)
-                smooth_labels = smooth_labels * mask.float()
-            
-            # Cross-entropy with smooth labels
-            log_probs = F.log_softmax(logits, dim=-1)
-            loss = -(smooth_labels * log_probs).sum(dim=-1)
-            
-            # Mask padding tokens
-            loss = loss.masked_fill(labels == -100, 0.0)
-        else:
-            # Standard cross-entropy
+        # Flatten logits and labels for consistent processing
+        logits_flat = logits.view(-1, vocab_size)
+        labels_flat = labels.view(-1)
+        
+        # Compute base cross-entropy loss
+        if use_smoothing and self.label_smoothing > 0 and SUPPORTS_LABEL_SMOOTHING:
+            # Label smoothing using PyTorch's built-in (PyTorch >= 1.10)
             loss = F.cross_entropy(
-                logits.view(-1, vocab_size),
-                labels.view(-1),
+                logits_flat,
+                labels_flat,
+                ignore_index=-100,
+                label_smoothing=self.label_smoothing,
+                reduction='none'
+            )
+        else:
+            # Standard cross-entropy (fallback for older PyTorch or when smoothing disabled)
+            loss = F.cross_entropy(
+                logits_flat,
+                labels_flat,
                 ignore_index=-100,
                 reduction='none'
             )
         
         # Emphasize format tokens
-        weights = torch.ones_like(labels, dtype=torch.float)
+        weights = torch.ones_like(labels_flat, dtype=torch.float)
         for token_id in self.special_token_ids:
-            weights[labels == token_id] = self.format_weight
+            weights[labels_flat == token_id] = self.format_weight
         
         # Apply weights and reduce
-        weighted_loss = (loss * weights.view(-1)).sum() / weights.view(-1).sum().clamp(min=1.0)
+        # Only compute mean over non-padding tokens
+        valid_mask = (labels_flat != -100).float()
+        weighted_loss = (loss * weights * valid_mask).sum() / (weights * valid_mask).sum().clamp(min=1.0)
         return weighted_loss
 
 # =====================
 # LOAD MODEL WITH MEMORY OPTIMIZATION
 # =====================
 print("[INFO] Loading VQAGenModel...")
+print(f"[INFO] PyTorch version: {torch.__version__}")
+print(f"[INFO] Label smoothing: {'Enabled' if SUPPORTS_LABEL_SMOOTHING else 'Disabled (PyTorch < 1.10)'}")
 print(f"[INFO] Using device: {device}")
 if torch.cuda.is_available():
     print(f"[INFO] GPU: {torch.cuda.get_device_name(0)}")
@@ -675,7 +677,11 @@ def compute_curriculum_loss(model, batch, weights, use_smoothing=True):
 # TRAINING LOOP
 # =====================
 # best_val_loss and early_stop_counter already initialized at the top with resume support
-autocast_ctx = torch.cuda.amp.autocast if device == "cuda" else nullcontext
+# Use new autocast API (torch 2.0+)
+if device == "cuda":
+    autocast_ctx = lambda: torch.amp.autocast('cuda')
+else:
+    autocast_ctx = nullcontext
 
 print(f"\n{'='*70}")
 print(f"MULTI-TASK CURRICULUM TRAINING CONFIGURATION")
