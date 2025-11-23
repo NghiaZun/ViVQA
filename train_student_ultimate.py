@@ -43,38 +43,43 @@ LOG_CSV = os.path.join(SAVE_DIR, "train_val_log_ultimate.csv")
 
 # Training config optimized for Kaggle T4 GPU (16GB)
 EPOCHS = 100
-LR = 5e-6  # Reduced LR for multi-task learning stability
+LR = 2e-6  # Further reduced for better generalization
 BATCH_SIZE = 2  # Reduced to 2 for 3x forward passes per batch
-VAL_RATIO = 0.1
+VAL_RATIO = 0.2  # Increased for better validation reliability
 MAX_A_LEN = 160
-EARLY_STOP_PATIENCE = 15
+EARLY_STOP_PATIENCE = 20  # Increased patience for curriculum learning
 accum_steps = 4  # Increased to maintain effective batch size of 8
-WARMUP_EPOCHS = 3  # Warmup for stable multi-task training
+WARMUP_EPOCHS = 5  # Extended warmup for stability
 
-# Resume training
-RESUME_FROM = "/kaggle/input/vivqa-checkpoint/transformers/default/1/latest_checkpoint.pt"
+# Resume training - SET TO None TO TRAIN FROM SCRATCH
+RESUME_FROM = None  # Set to None to start fresh training
 AUTO_CHECKPOINT_PATH = os.path.join(SAVE_DIR, "latest_checkpoint.pt")  # Auto-saved every epoch
 
 # Memory optimization flags
 USE_GRADIENT_CHECKPOINTING = True
 EMPTY_CACHE_EVERY_N_STEPS = 50
 PIN_MEMORY = False  # Set False if OOM issues
-GRADIENT_CLIP_VALUE = 1.0  # Clip gradients for stability
+GRADIENT_CLIP_VALUE = 0.5  # Stricter gradient clipping
 USE_MIXED_PRECISION = True  # Enable AMP for memory/speed
 
 # EMA (Exponential Moving Average) for model stability
 USE_EMA = True
-EMA_DECAY = 0.999  # 0.999 for smooth averaging
+EMA_DECAY = 0.9995  # Increased for more stable averaging
 
-# Curriculum stages - Adjusted for multi-task learning
-STAGE_1_EPOCHS = 20  # Focus on answer accuracy
-STAGE_2_EPOCHS = 40  # Balance all components
-STAGE_3_EPOCHS = 60  # Emphasize reasoning quality
+# Curriculum stages - Extended Stage 1 to truly master answers
+STAGE_1_EPOCHS = 35  # Extended focus on answer accuracy
+STAGE_2_EPOCHS = 55  # Balance all components
+STAGE_3_EPOCHS = 75  # Emphasize reasoning quality
 
 # Format validation during training
 VALIDATE_FORMAT_EVERY_N_EPOCHS = 5  # Check format quality every N epochs
 
-SEED = 42
+# Stronger regularization
+LABEL_SMOOTHING = 0.15  # Increased from 0.1 for better generalization
+WEIGHT_DECAY = 3e-4  # Increased from 1e-4
+DROPOUT_RATE = 0.2  # Dropout for encoder/decoder
+
+SEED = 2025  # Changed seed for different data split
 random.seed(SEED)
 torch.manual_seed(SEED)
 if torch.cuda.is_available():
@@ -274,32 +279,37 @@ def validate_model_format(model, val_loader, device, tokenizer, vision_processor
 def get_curriculum_weights(epoch):
     """
     3-stage curriculum learning optimized for multi-task:
-    Stage 1 (0-20): Master answer generation first
-    Stage 2 (20-40): Balance all components equally
-    Stage 3 (40+): Emphasize reasoning quality
+    Stage 1 (0-35): Master answer generation first (EXTENDED)
+    Stage 2 (35-55): Balance all components equally
+    Stage 3 (55+): Emphasize reasoning quality
     """
     if epoch < STAGE_1_EPOCHS:
-        # Stage 1: Answer accuracy is critical foundation
+        # Stage 1: Answer accuracy is critical foundation (EXTENDED)
+        # Progressive weight adjustment within Stage 1
+        progress = epoch / STAGE_1_EPOCHS
+        w_answer = 0.55 - 0.05 * progress      # 0.55 → 0.50 (maintain high)
+        w_format = 0.30 + 0.05 * progress      # 0.30 → 0.35 (gradual increase)
+        w_reason = 0.15                        # 0.15 (constant low)
         return {
-            "answer": 0.50,  # High weight on getting answers right
-            "format": 0.35,  # Medium weight on structure
-            "reason": 0.15,  # Low weight on reasoning details
+            "answer": w_answer,
+            "format": w_format,
+            "reason": w_reason,
             "stage": "ANSWER_MASTERY"
         }
     elif epoch < STAGE_2_EPOCHS:
         # Stage 2: Balanced multi-task learning
         return {
-            "answer": 0.35,  # Still important
+            "answer": 0.40,  # Still important (increased from 0.35)
             "format": 0.35,  # Equally important
-            "reason": 0.30,  # Growing importance
+            "reason": 0.25,  # Growing importance
             "stage": "BALANCED_LEARNING"
         }
     else:
         # Stage 3: Reasoning quality refinement
         progress = (epoch - STAGE_2_EPOCHS) / (EPOCHS - STAGE_2_EPOCHS)
-        w_answer = 0.25 - 0.05 * progress      # 0.25 → 0.20 (maintain but reduce)
+        w_answer = 0.30 - 0.05 * progress      # 0.30 → 0.25 (maintain importance)
         w_format = 0.25 - 0.05 * progress      # 0.25 → 0.20 (maintain structure)
-        w_reason = 0.50 + 0.10 * progress      # 0.50 → 0.60 (increase quality)
+        w_reason = 0.45 + 0.10 * progress      # 0.45 → 0.55 (increase quality)
         
         return {
             "answer": w_answer,
@@ -324,12 +334,14 @@ class CurriculumDistillDataset(Dataset):
         self.max_a_len = max_a_len
         self.augment = augment
         
-        # Image augmentation for training (reduce overfitting)
+        # Image augmentation for training (stronger to reduce overfitting)
         if augment:
             self.augment_transform = transforms.Compose([
-                transforms.RandomHorizontalFlip(p=0.3),
-                transforms.ColorJitter(brightness=0.2, contrast=0.2, saturation=0.2, hue=0.1),
-                transforms.RandomRotation(degrees=5),
+                transforms.RandomHorizontalFlip(p=0.5),
+                transforms.ColorJitter(brightness=0.3, contrast=0.3, saturation=0.3, hue=0.15),
+                transforms.RandomRotation(degrees=10),
+                transforms.RandomResizedCrop(224, scale=(0.85, 1.0)),
+                transforms.RandomGrayscale(p=0.1),
             ])
         else:
             self.augment_transform = None
@@ -507,15 +519,15 @@ if RESUME_FROM and os.path.exists(RESUME_FROM):
     clear_memory()
     print_gpu_memory()
 
-# Initialize multi-task loss with label smoothing
+# Initialize multi-task loss with stronger label smoothing
 multi_task_loss_fn = MultiTaskLoss(
     model.decoder_tokenizer, 
-    label_smoothing=0.1,  # Smooth labels to prevent overfitting
-    format_weight=2.5     # Emphasize format tokens
+    label_smoothing=LABEL_SMOOTHING,  # Use config value (0.15)
+    format_weight=2.0     # Reduced emphasis for balance
 )
 
-# Optimizer & Scheduler with warmup
-optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=1e-4)
+# Optimizer & Scheduler with stronger weight decay
+optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
 
 # Warmup + Cosine Annealing for stable multi-task training
 def get_lr_multiplier(epoch):
@@ -684,18 +696,20 @@ else:
     autocast_ctx = nullcontext
 
 print(f"\n{'='*70}")
-print(f"MULTI-TASK CURRICULUM TRAINING CONFIGURATION")
+print(f"MULTI-TASK CURRICULUM TRAINING CONFIGURATION (ENHANCED ANTI-OVERFITTING)")
 print(f"{'='*70}")
 print(f"[STRATEGY] 3 separate objectives: Answer + Reasoning + Format")
-print(f"[CURRICULUM] Stage 1 (0-{STAGE_1_EPOCHS}): Answer Mastery (50%/35%/15%)")
-print(f"[CURRICULUM] Stage 2 ({STAGE_1_EPOCHS}-{STAGE_2_EPOCHS}): Balanced Learning (35%/35%/30%)")
-print(f"[CURRICULUM] Stage 3 ({STAGE_2_EPOCHS}+): Reasoning Refinement (20%/20%/60%)")
-print(f"\n[ANTI-OVERFITTING]")
-print(f"  • Label Smoothing: 0.1")
-print(f"  • Image Augmentation: Flip + ColorJitter + Rotation")
+print(f"[CURRICULUM] Stage 1 (0-{STAGE_1_EPOCHS}): Answer Mastery EXTENDED (55%/35%/15%)")
+print(f"[CURRICULUM] Stage 2 ({STAGE_1_EPOCHS}-{STAGE_2_EPOCHS}): Balanced Learning (40%/35%/25%)")
+print(f"[CURRICULUM] Stage 3 ({STAGE_2_EPOCHS}+): Reasoning Refinement (25%/20%/55%)")
+print(f"\n[ANTI-OVERFITTING - ENHANCED]")
+print(f"  • Label Smoothing: {LABEL_SMOOTHING} (increased)")
+print(f"  • Image Augmentation: Flip + ColorJitter + Rotation + Crop + Grayscale")
 print(f"  • EMA: {'Enabled' if USE_EMA else 'Disabled'} (decay={EMA_DECAY if USE_EMA else 'N/A'})")
-print(f"  • Gradient Clipping: {GRADIENT_CLIP_VALUE}")
-print(f"  • Weight Decay: 1e-4")
+print(f"  • Gradient Clipping: {GRADIENT_CLIP_VALUE} (stricter)")
+print(f"  • Weight Decay: {WEIGHT_DECAY} (increased)")
+print(f"  • Validation Ratio: {VAL_RATIO*100:.0f}% (increased for reliability)")
+print(f"  • Random Seed: {SEED} (changed for fresh split)")
 print(f"\n[OPTIMIZATION]")
 print(f"  • Base LR: {LR:.2e}")
 print(f"  • LR Warmup: {WARMUP_EPOCHS} epochs")
