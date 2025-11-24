@@ -33,7 +33,7 @@ from datetime import datetime
 # =====================
 # CONFIG - OPTIMIZED
 # =====================
-DATA_PATH = "/kaggle/input/teacher-outputs-simple/teacher_outputs_simple.jsonl"
+DATA_PATH = "/kaggle/input/d/dngtrungngha25/teacher-checkpoint-11k/teacher_outputs_simple.jsonl"
 SAVE_DIR = "/kaggle/working"
 
 BEST_MODEL_PATH = os.path.join(SAVE_DIR, "vqa_best.pt")
@@ -355,6 +355,12 @@ if RESUME_FROM and os.path.exists(RESUME_FROM):
     print(f"[INFO] Resuming from epoch {start_epoch}, best_val_loss={best_val_loss:.4f}")
     del checkpoint
     clear_memory()
+else:
+    print("[INFO] Loading pretrained weights...")
+    state_dict = torch.load("/kaggle/input/checkpoints/transformers/default/1/checkpoints/best_model.pth", map_location='cpu')
+    model.load_state_dict(state_dict)
+    print("[INFO] Pretrained weights loaded successfully!")
+
 
 # Optimizer & Scheduler
 optimizer = torch.optim.AdamW(model.parameters(), lr=LR, weight_decay=WEIGHT_DECAY)
