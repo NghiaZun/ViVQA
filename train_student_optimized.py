@@ -360,6 +360,15 @@ else:
     state_dict = torch.load("/kaggle/input/checkpoints/transformers/default/1/checkpoints/best_model.pth", map_location='cpu')
     model.load_state_dict(state_dict)
     print("[INFO] Pretrained weights loaded successfully!")
+    del state_dict
+    clear_memory()
+
+# Add special tokens AFTER loading checkpoint
+print("[INFO] Adding special tokens to decoder...")
+added_tokens = model.add_special_tokens_and_resize()
+if added_tokens > 0:
+    print(f"[INFO] Successfully added {added_tokens} special tokens")
+model = model.to(device)  # Move to device again after resizing
 
 
 # Optimizer & Scheduler
