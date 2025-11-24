@@ -326,8 +326,8 @@ clear_memory()
 
 model = VQAGenModel(
     vision_model_name="Salesforce/blip-vqa-base",
-    phobert_dir="/kaggle/input/base/transformers/default/1/checkpoints/phobert_tokenizer",
-    vit5_dir="/kaggle/input/base/transformers/default/1/checkpoints/vit5_tokenizer"
+    phobert_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/phobert_tokenizer",
+    vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 )
 
 if USE_GRADIENT_CHECKPOINTING:
