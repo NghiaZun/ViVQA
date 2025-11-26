@@ -108,7 +108,7 @@ results = []
 for idx, sample_idx in enumerate(sample_indices, 1):
     row = test_df.iloc[sample_idx]
     
-    img_name = str(row['img_id'])  # Convert to string
+    img_name = str(row['img_id']) + '.jpg'  # Add .jpg extension
     question = row['question']
     ground_truth = row['answer']
     
@@ -188,7 +188,10 @@ print(f"\n{'='*80}")
 print(f"SUMMARY")
 print(f"{'='*80}")
 print(f"Total Samples: {len(results)}")
-print(f"Valid Format: {valid_count}/{len(results)} ({valid_count/len(results)*100:.1f}%)")
+if len(results) > 0:
+    print(f"Valid Format: {valid_count}/{len(results)} ({valid_count/len(results)*100:.1f}%)")
+else:
+    print(f"Valid Format: N/A (no samples processed)")
 print(f"{'='*80}\n")
 
 # =====================
