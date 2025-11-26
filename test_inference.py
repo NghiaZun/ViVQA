@@ -108,7 +108,7 @@ results = []
 for idx, sample_idx in enumerate(sample_indices, 1):
     row = test_df.iloc[sample_idx]
     
-    img_name = row['img_id']
+    img_name = str(row['img_id'])  # Convert to string
     question = row['question']
     ground_truth = row['answer']
     
