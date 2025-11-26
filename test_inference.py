@@ -16,8 +16,8 @@ import re
 # CONFIG
 # =====================
 MODEL_PATH = "/kaggle/input/best-v1/transformers/default/1/vqa_best.pt"  # or vqa_final.pt
-TEST_CSV = "/kaggle/input/vivqa-dataset/ViVQA-main/ViVQA-main/test.csv"
-IMAGE_DIR = "/kaggle/input/vivqa-dataset/drive-download-20220309T020508Z-001/test"
+TEST_CSV = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/test.csv"
+IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/test"
 
 NUM_SAMPLES = 10  # Number of test samples to check
 device = "cuda" if torch.cuda.is_available() else "cpu"
