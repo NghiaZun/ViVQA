@@ -34,6 +34,12 @@ model = VQAGenModel(
     vit5_dir="/kaggle/input/checkpoints/transformers/default/1/checkpoints/vit5_tokenizer"
 )
 
+# Add special tokens BEFORE loading checkpoint
+print("[INFO] Adding special tokens...")
+added_tokens = model.add_special_tokens_and_resize()
+if added_tokens > 0:
+    print(f"[INFO] Added {added_tokens} special tokens")
+
 # Load trained weights
 state_dict = torch.load(MODEL_PATH, map_location='cpu')
 model.load_state_dict(state_dict)
