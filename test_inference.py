@@ -197,17 +197,20 @@ print(f"{'='*80}\n")
 # =====================
 # SAVE RESULTS
 # =====================
-output_file = "/kaggle/working/test_inference_results.json"
-with open(output_file, "w", encoding="utf-8") as f:
-    json.dump(results, f, ensure_ascii=False, indent=2)
+if len(results) > 0:
+    output_file = "/kaggle/working/test_inference_results.json"
+    with open(output_file, "w", encoding="utf-8") as f:
+        json.dump(results, f, ensure_ascii=False, indent=2)
 
-print(f"[INFO] Results saved to: {output_file}")
-print(f"[INFO] Format accuracy: {valid_count/len(results)*100:.1f}%")
+    print(f"[INFO] Results saved to: {output_file}")
+    print(f"[INFO] Format accuracy: {valid_count/len(results)*100:.1f}%")
 
-# Show examples of invalid format (if any)
-invalid_samples = [r for r in results if not r['valid_format']]
-if invalid_samples:
-    print(f"\n[WARN] {len(invalid_samples)} samples have invalid format:")
-    for r in invalid_samples[:3]:
-        print(f"\n  Sample {r['idx']}:")
-        print(f"  Generated: {r['generated'][:100]}...")
+    # Show examples of invalid format (if any)
+    invalid_samples = [r for r in results if not r['valid_format']]
+    if invalid_samples:
+        print(f"\n[WARN] {len(invalid_samples)} samples have invalid format:")
+        for r in invalid_samples[:3]:
+            print(f"\n  Sample {r['idx']}:")
+            print(f"  Generated: {r['generated'][:100]}...")
+else:
+    print("[ERROR] No samples were processed successfully!")
