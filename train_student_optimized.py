@@ -347,6 +347,15 @@ early_stop_counter = 0
 
 if RESUME_FROM and os.path.exists(RESUME_FROM):
     print(f"[INFO] Resuming from: {RESUME_FROM}")
+    
+    # Add special tokens FIRST to match checkpoint vocab size
+    print("[INFO] Adding special tokens to decoder...")
+    added_tokens = model.add_special_tokens_and_resize()
+    if added_tokens > 0:
+        print(f"[INFO] Successfully added {added_tokens} special tokens")
+    model = model.to(device)
+    
+    # Then load checkpoint
     checkpoint = torch.load(RESUME_FROM, map_location='cpu')
     model.load_state_dict(checkpoint['model_state_dict'])
     start_epoch = checkpoint.get('epoch', 0) + 1
@@ -362,13 +371,13 @@ else:
     print("[INFO] Pretrained weights loaded successfully!")
     del state_dict
     clear_memory()
-
-# Add special tokens AFTER loading checkpoint
-print("[INFO] Adding special tokens to decoder...")
-added_tokens = model.add_special_tokens_and_resize()
-if added_tokens > 0:
-    print(f"[INFO] Successfully added {added_tokens} special tokens")
-model = model.to(device)  # Move to device again after resizing
+    
+    # Add special tokens AFTER loading pretrained weights
+    print("[INFO] Adding special tokens to decoder...")
+    added_tokens = model.add_special_tokens_and_resize()
+    if added_tokens > 0:
+        print(f"[INFO] Successfully added {added_tokens} special tokens")
+    model = model.to(device)
 
 
 # Optimizer & Scheduler
