@@ -81,35 +81,6 @@ class VQAGenModel(nn.Module):
             print("[WARN] VietT5 tokenizer fallback → HF")
             self.decoder_tokenizer = AutoTokenizer.from_pretrained("VietAI/vit5-base", use_fast=False)
 
-        # --------------------------------------------------------------------
-        #  🔥 SPECIAL TOKENS - Call add_special_tokens_and_resize() AFTER loading checkpoint
-        # --------------------------------------------------------------------
-        self._special_tokens_added = False
-
-    def add_special_tokens_and_resize(self):
-        """Add special tokens and resize embeddings. Call AFTER loading checkpoint."""
-        if self._special_tokens_added:
-            print("[INFO] Special tokens already added, skipping...")
-            return 0
-        
-        special_tokens = [
-            "<answer>", "</answer>",
-            "<reasoning>", "</reasoning>",
-            "[DESCRIPTIVE]", "[CAUSAL]", "[NEUTRAL]", "[OBJECT-BASED]",
-            "[SPATIAL]", "[COUNTING]", "[COMMONSENSE]", "[INTENT]"
-        ]
-
-        added = self.decoder_tokenizer.add_special_tokens(
-            {"additional_special_tokens": special_tokens}
-        )
-
-        if added > 0:
-            print(f"[INFO] Added {added} special tokens → resizing decoder embeddings…")
-            self.decoder.resize_token_embeddings(len(self.decoder_tokenizer))
-            self._special_tokens_added = True
-        
-        return added
-
     # ===================================================================
     # FORWARD (training)
     # ===================================================================
