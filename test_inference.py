@@ -59,14 +59,18 @@ random.seed(42)
 sample_indices = random.sample(range(len(test_df)), min(NUM_SAMPLES, len(test_df)))
 
 # =====================
-# PARSER
+# PARSER - FLEXIBLE FOR MULTIPLE FORMATS
 # =====================
 def parse_output(text: str):
-    """Parse Answer: X / Reasoning: Y format"""
+    """
+    Parse multiple formats:
+    1. Answer: X\nReasoning: Y
+    2. X. Giải thích: Reasoning (Type): Y
+    """
     answer = ""
     reasoning = ""
     
-    # Regex extraction
+    # Method 1: Standard format "Answer: X"
     answer_match = re.search(r'Answer:\s*(.+?)(?:\n|$)', text, re.IGNORECASE)
     reasoning_match = re.search(r'Reasoning:\s*(.+?)$', text, re.IGNORECASE | re.DOTALL)
     
@@ -74,6 +78,23 @@ def parse_output(text: str):
         answer = answer_match.group(1).strip()
     if reasoning_match:
         reasoning = reasoning_match.group(1).strip()
+    
+    # Method 2: Vietnamese format "X. Giải thích: Reasoning (Type): Y"
+    if not answer or not reasoning:
+        # Extract answer before "Giải thích"
+        vn_match = re.search(r'^(.+?)\.\s*Giải thích:\s*Reasoning\s*\([^)]+\):\s*(.+)$', text, re.DOTALL)
+        if vn_match:
+            answer = vn_match.group(1).strip()
+            reasoning = vn_match.group(2).strip()
+    
+    # Method 3: Simpler - just "X. Reasoning: Y" or "X. Giải thích: Y"
+    if not answer or not reasoning:
+        simple_match = re.search(r'^(.+?)\.\s*(?:Giải thích|Reasoning)[:\s]+(.+)$', text, re.IGNORECASE | re.DOTALL)
+        if simple_match:
+            answer = simple_match.group(1).strip()
+            reasoning = simple_match.group(2).strip()
+            # Remove "Reasoning (Type):" prefix if exists
+            reasoning = re.sub(r'^Reasoning\s*\([^)]+\):\s*', '', reasoning, flags=re.IGNORECASE)
     
     # Fallback: line-based
     if not answer or not reasoning:
@@ -83,6 +104,12 @@ def parse_output(text: str):
                 answer = line.split(':', 1)[1].strip()
             elif line.lower().startswith('reasoning:'):
                 reasoning = line.split(':', 1)[1].strip()
+    
+    # Last resort: if answer not found but text exists, use first sentence as answer
+    if not answer and text:
+        first_part = text.split('.')[0].strip()
+        if len(first_part) < 100:  # Reasonable answer length
+            answer = first_part
     
     return {
         'answer': answer,
