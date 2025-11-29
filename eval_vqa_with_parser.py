@@ -8,7 +8,7 @@ from torch.utils.data import DataLoader
 import pandas as pd
 import numpy as np
 from tqdm import tqdm
-from transformers import AutoTokenizer, BlipImageProcessor
+from transformers import AutoTokenizer, BlipProcessor
 
 from rouge_score import rouge_scorer
 import re
