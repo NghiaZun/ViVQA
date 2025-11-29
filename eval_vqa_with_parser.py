@@ -33,17 +33,19 @@ def normalize_text(s):
 
 
 # ======================
-# PARSER FOR "Answer: X Reasoning: Y" FORMAT
+# PARSER - SUPPORTS MULTIPLE FORMATS
 # ======================
 def parse_answer_reasoning(text: str):
     """
-    Parse model output in format: "Answer: X Reasoning: Y"
+    Parse model output in multiple formats:
+    1. "Answer: X Reasoning: Y" (standard)
+    2. "X. Giải thích: Reasoning (Type): Y" (Vietnamese)
     Returns dict with answer, reasoning, and validity flag
     """
     answer = ""
     reasoning = ""
     
-    # Method 1: Regex extraction
+    # Method 1: Standard format "Answer: X"
     answer_match = re.search(r'Answer:\s*(.+?)(?:\s+Reasoning:|$)', text, re.IGNORECASE | re.DOTALL)
     reasoning_match = re.search(r'Reasoning:\s*(.+?)$', text, re.IGNORECASE | re.DOTALL)
     
@@ -52,7 +54,23 @@ def parse_answer_reasoning(text: str):
     if reasoning_match:
         reasoning = reasoning_match.group(1).strip()
     
-    # Method 2: Line-based fallback
+    # Method 2: Vietnamese format "X. Giải thích: Reasoning (Type): Y"
+    if not answer or not reasoning:
+        vn_match = re.search(r'^(.+?)\.\s*Giải thích:\s*Reasoning\s*\([^)]+\):\s*(.+)$', text, re.DOTALL)
+        if vn_match:
+            answer = vn_match.group(1).strip()
+            reasoning = vn_match.group(2).strip()
+    
+    # Method 3: Simpler - "X. Reasoning: Y" or "X. Giải thích: Y"
+    if not answer or not reasoning:
+        simple_match = re.search(r'^(.+?)\.\s*(?:Giải thích|Reasoning)[:\s]+(.+)$', text, re.IGNORECASE | re.DOTALL)
+        if simple_match:
+            answer = simple_match.group(1).strip()
+            reasoning = simple_match.group(2).strip()
+            # Remove "Reasoning (Type):" prefix if exists
+            reasoning = re.sub(r'^Reasoning\s*\([^)]+\):\s*', '', reasoning, flags=re.IGNORECASE)
+    
+    # Method 4: Line-based fallback
     if not answer or not reasoning:
         lines = [l.strip() for l in text.split('\n') if l.strip()]
         for line in lines:
@@ -62,16 +80,18 @@ def parse_answer_reasoning(text: str):
             elif lower_line.startswith('reasoning:'):
                 reasoning = line.split(':', 1)[1].strip()
     
-    # Method 3: If answer contains "Reasoning:", split it
+    # Method 5: If answer contains "Reasoning:", split it
     if "Reasoning:" in answer or "reasoning:" in answer:
         parts = re.split(r'\s+reasoning:\s*', answer, maxsplit=1, flags=re.IGNORECASE)
         if len(parts) == 2:
             answer = parts[0].strip()
             reasoning = parts[1].strip()
     
-    # Method 4: Last resort - use full text as answer
+    # Method 6: Last resort - if answer not found but text exists, use first sentence
     if not answer and text:
-        answer = text.strip()
+        first_part = text.split('.')[0].strip()
+        if len(first_part) < 100:  # Reasonable answer length
+            answer = first_part
     
     return {
         'answer': answer,
@@ -118,12 +138,8 @@ model = VQAGenModel(
     vit5_dir=os.path.join(TOKENIZER_DIR, "vit5_tokenizer")
 )
 
-# Add special tokens if needed
-added_tokens = model.add_special_tokens_and_resize()
-if added_tokens > 0:
-    print(f"[INFO] Added {added_tokens} special tokens")
-
 # Load checkpoint
+print("[INFO] Loading checkpoint...")
 state_dict = torch.load(MODEL_PATH, map_location='cpu')
 if isinstance(state_dict, dict) and 'model' in state_dict:
     model.load_state_dict(state_dict['model'])
