@@ -186,36 +186,18 @@ NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CH�
 df = pd.read_csv(CSV_PATH)
 results = []
 
-print(f"\n[INFO] Processing {len(df)} samples...")
-print("[INFO] First sample may take 1-3 minutes (model warmup)")
-print("[INFO] Auto-saving every 100 samples to prevent data loss")
-print("[INFO] Estimated time: ~10 hours for full dataset")
+print(f"[INFO] Processing {len(df)} samples | Auto-save every 100 | ETA: ~10h")
 
-for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)")):
+for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     if not os.path.exists(image_path):
         continue
 
     q = str(row["question"]).strip()
-    gt_answer = str(row["answer"]).strip()  # ✅ Lấy ground truth answer
-
-    # Debug: Print first sample info
-    if idx == 0:
-        print(f"\n[DEBUG] First sample:")
-        print(f"  Image: {image_id}")
-        print(f"  Question: {q[:50]}...")
-        print(f"  GT Answer: {gt_answer}")
-        print(f"  Calling teacher model (this takes 1-3 min)...")
+    gt_answer = str(row["answer"]).strip()
     
-    res = call_teacher_qwen(image_path, q, gt_answer)  # ✅ Qwen tự chọn type
-    
-    # Debug: Print first result
-    if idx == 0:
-        print(f"[DEBUG] First result:")
-        print(f"  Teacher answer: {res['answer']}")
-        print(f"  Reasoning type: {res['reasoning_type']}")
-        print(f"  Speed will be ~3s/sample from now on!\n")
+    res = call_teacher_qwen(image_path, q, gt_answer)
     
     if res["answer"]:
         results.append({
@@ -229,16 +211,14 @@ for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher 
             "reasoning_weight": res["reasoning_weight"]
         })
     
-    # Auto-save every 100 samples
     if (idx + 1) % 100 == 0:
         with open(OUT_JSONL, "w", encoding="utf-8") as f:
             for r in results:
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
-        print(f"\n[AUTO-SAVE] Saved {len(results)} samples at {idx+1}/{len(df)}")
 
 # Final save
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-print(f"\n[INFO] ✅ Complete! Saved {len(results)} teacher samples → {OUT_JSONL}")
+print(f"[DONE] {len(results)} samples → {OUT_JSONL}")
