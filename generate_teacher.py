@@ -1,6 +1,9 @@
 """
-teacher_generate.py – Generate teacher answers from balanced dataset
-Author: Nghia-Duong (final)
+teacher_generate.py – Generate teacher REASONING for ground truth answers
+Author: Nghia-Duong (Option 2: GT-guided)
+
+Strategy: Teacher nhìn image + question + GT answer → sinh reasoning giải thích
+Ưu điểm: Reasoning khớp 100% với GT, student học cách GIẢI THÍCH đúng
 """
 
 import os
@@ -16,10 +19,21 @@ from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
 # ===========================
 # CONFIG
 # ===========================
-CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
+CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"  # Original dataset
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
+MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
+OUT_JSONL = "/kaggle/working/teacher_outputs_gt_guided.jsonl"
+
+# Reasoning type keywords để auto-classify
+REASONING_KEYWORDS = {
+    "COUNTING": ["bao nhiêu", "mấy", "số lượng", "đếm", "có bao nhiêu"],
+    "SPATIAL": ["ở đâu", "vị trí", "phía", "trên", "dưới", "trong", "ngoài", "cạnh", "giữa"],
+    "CAUSAL": ["tại sao", "vì sao", "lý do", "nguyên nhân", "để làm gì"],
+    "OBJECT": ["cái gì", "con gì", "là gì", "vật gì", "đồ gì"],
+    "INTENT": ["mục đích", "ý định", "để làm gì", "dùng để"],
+    "COMMONSENSE": ["nên", "thường", "có thể", "phải"],
+    "DESCRIPTIVE": []  # Default fallback
+}
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -30,6 +44,19 @@ REASONING_WEIGHTS = {
     "SPATIAL": 1.5,
     "COMMONSENSE": 1.0
 }
+
+def infer_reasoning_type(question: str) -> str:
+    """Auto-classify reasoning type based on question keywords"""
+    q_lower = question.lower().strip()
+    
+    for rtype, keywords in REASONING_KEYWORDS.items():
+        if rtype == "DESCRIPTIVE":
+            continue
+        for kw in keywords:
+            if kw in q_lower:
+                return rtype
+    
+    return "DESCRIPTIVE"  # Default
 
 # ===========================
 # LOAD MODEL
@@ -64,21 +91,43 @@ def parse_structured_output(text: str):
 # ===========================
 # TEACHER GENERATION
 # ===========================
-def call_teacher_qwen(image_path: str, question: str, expected_type: str):
+def call_teacher_qwen(image_path: str, question: str, ground_truth: str):
     try:
         image = Image.open(image_path).convert("RGB")
     except Exception as e:
         print(f"[WARN] Cannot open image {image_path}: {e}")
         return {"answer": "", "reasoning": "", "reasoning_type": "", "raw": ""}
 
-    user_prompt = build_fewshot_prompt(question)
+    # Ground-truth guided prompt: Qwen tự chọn reasoning type phù hợp
+    user_prompt = f"""Hãy quan sát hình ảnh và trả lời câu hỏi sau theo đúng format XML:
+
+Câu hỏi: {question}
+Đáp án đúng: {ground_truth}
+
+Nhiệm vụ: Hãy giải thích TẠI SAO đáp án là "{ground_truth}" dựa vào những gì bạn nhìn thấy trong hình ảnh.
+
+Format bắt buộc:
+<answer>{ground_truth}</answer>
+<reasoning>[LOẠI_REASONING] Giải thích chi tiết dựa vào hình ảnh (1-2 câu)</reasoning>
+
+Trong đó LOẠI_REASONING phải là 1 trong các loại sau (TỰ CHỌN phù hợp nhất):
+- COUNTING: Đếm số lượng vật thể
+- SPATIAL: Vị trí, không gian
+- CAUSAL: Nguyên nhân, lý do
+- OBJECT: Nhận diện vật thể
+- INTENT: Mục đích, ý định
+- COMMONSENSE: Kiến thức thường thức
+- DESCRIPTIVE: Mô tả đặc điểm (màu sắc, hình dạng, trạng thái)
+
+Lưu ý: 
+- Giải thích phải liên quan trực tiếp đến nội dung hình ảnh
+- TỰ CHỌN loại reasoning phù hợp nhất với câu hỏi
+- Giải thích ngắn gọn, rõ ràng bằng tiếng Việt
+"""
 
     enhanced_system_prompt = f"""{SYSTEM_PROMPT}
 
-BẠN PHẢI TRẢ LỜI THEO FORMAT:
-
-<answer>Câu trả lời ngắn</answer>
-<reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
+NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CHỌN loại reasoning phù hợp
 """
 
     messages = [
@@ -114,8 +163,10 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
         )[0].strip()
 
         answer, reasoning, reasoning_type = parse_structured_output(gen)
+        
+        # Fallback: Nếu Qwen không output type, dùng heuristic
         if not reasoning_type:
-            reasoning_type = expected_type
+            reasoning_type = infer_reasoning_type(question)
 
         return {
             "answer": answer,
@@ -135,16 +186,16 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
 df = pd.read_csv(CSV_PATH)
 results = []
 
-for _, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
+for _, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)"):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     if not os.path.exists(image_path):
         continue
 
     q = str(row["question"]).strip()
-    exp_type = row["reasoning_type"]
+    gt_answer = str(row["answer"]).strip()  # ✅ Lấy ground truth answer
 
-    res = call_teacher_qwen(image_path, q, exp_type)
+    res = call_teacher_qwen(image_path, q, gt_answer)  # ✅ Qwen tự chọn type
 
     if res["answer"]:
         results.append({
