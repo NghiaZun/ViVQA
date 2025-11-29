@@ -181,12 +181,17 @@ NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CH�
         return {"answer": "", "reasoning": "", "reasoning_type": "", "raw": "", "reasoning_weight": 1.0}
 
 # ===========================
-# MAIN LOOP
+# MAIN LOOP WITH AUTO-SAVE
 # ===========================
 df = pd.read_csv(CSV_PATH)
 results = []
 
-for _, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)"):
+print(f"\n[INFO] Processing {len(df)} samples...")
+print("[INFO] First sample may take 1-3 minutes (model warmup)")
+print("[INFO] Auto-saving every 100 samples to prevent data loss")
+print("[INFO] Estimated time: ~10 hours for full dataset")
+
+for idx, row in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     if not os.path.exists(image_path):
@@ -195,6 +200,8 @@ for _, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-gu
     q = str(row["question"]).strip()
     gt_answer = str(row["answer"]).strip()  # ✅ Lấy ground truth answer
 
+    _, row = row  # Unpack tuple from iterrows()
+    
     res = call_teacher_qwen(image_path, q, gt_answer)  # ✅ Qwen tự chọn type
 
     if res["answer"]:
@@ -208,9 +215,17 @@ for _, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-gu
             "teacher_raw": res["raw"],
             "reasoning_weight": res["reasoning_weight"]
         })
+    
+    # Auto-save every 100 samples
+    if (idx + 1) % 100 == 0:
+        with open(OUT_JSONL, "w", encoding="utf-8") as f:
+            for r in results:
+                f.write(json.dumps(r, ensure_ascii=False) + "\n")
+        print(f"\n[AUTO-SAVE] Saved {len(results)} samples at {idx+1}/{len(df)}")
 
+# Final save
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
     for r in results:
         f.write(json.dumps(r, ensure_ascii=False) + "\n")
 
-print(f"[INFO] ✅ Saved {len(results)} teacher samples → {OUT_JSONL}")
+print(f"\n[INFO] ✅ Complete! Saved {len(results)} teacher samples → {OUT_JSONL}")
