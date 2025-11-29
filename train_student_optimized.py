@@ -52,7 +52,7 @@ accum_steps = 2              # Effective batch = 8
 WARMUP_EPOCHS = 5
 
 # Resume training
-RESUME_FROM = "/kaggle/input/25-11/transformers/default/1/latest_checkpoint.pt"
+RESUME_FROM = "/kaggle/input/29-11/transformers/default/1/checkpoints/latest_checkpoint.pt"
 AUTO_CHECKPOINT_PATH = os.path.join(SAVE_DIR, "latest_checkpoint.pt")
 
 # Memory optimization
