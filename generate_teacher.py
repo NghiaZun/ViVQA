@@ -200,7 +200,22 @@ for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher 
     q = str(row["question"]).strip()
     gt_answer = str(row["answer"]).strip()  # ✅ Lấy ground truth answer
 
+    # Debug: Print first sample info
+    if idx == 0:
+        print(f"\n[DEBUG] First sample:")
+        print(f"  Image: {image_id}")
+        print(f"  Question: {q[:50]}...")
+        print(f"  GT Answer: {gt_answer}")
+        print(f"  Calling teacher model (this takes 1-3 min)...")
+    
     res = call_teacher_qwen(image_path, q, gt_answer)  # ✅ Qwen tự chọn type
+    
+    # Debug: Print first result
+    if idx == 0:
+        print(f"[DEBUG] First result:")
+        print(f"  Teacher answer: {res['answer']}")
+        print(f"  Reasoning type: {res['reasoning_type']}")
+        print(f"  Speed will be ~3s/sample from now on!\n")
     
     if res["answer"]:
         results.append({
