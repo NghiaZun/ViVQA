@@ -191,7 +191,7 @@ print("[INFO] First sample may take 1-3 minutes (model warmup)")
 print("[INFO] Auto-saving every 100 samples to prevent data loss")
 print("[INFO] Estimated time: ~10 hours for full dataset")
 
-for idx, row in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)")):
+for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating (GT-guided)")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     if not os.path.exists(image_path):
@@ -200,10 +200,8 @@ for idx, row in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Gener
     q = str(row["question"]).strip()
     gt_answer = str(row["answer"]).strip()  # ✅ Lấy ground truth answer
 
-    _, row = row  # Unpack tuple from iterrows()
-    
     res = call_teacher_qwen(image_path, q, gt_answer)  # ✅ Qwen tự chọn type
-
+    
     if res["answer"]:
         results.append({
             "img_id": image_id,
