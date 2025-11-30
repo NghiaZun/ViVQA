@@ -21,7 +21,7 @@ from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
 # ===========================
 CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"  # Original dataset
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
-MODEL_NAME = "Qwen/Qwen2.5-VL-7B-Instruct"
+MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"  # Changed from 2.5 → 2 for 10x speed
 OUT_JSONL = "/kaggle/working/teacher_outputs_gt_guided.jsonl"
 
 # Reasoning type keywords để auto-classify
@@ -181,7 +181,7 @@ df = pd.read_csv(CSV_PATH)
 results = []
 
 print(f"[INFO] Processing {len(df)} samples | Auto-save every 100")
-print(f"[INFO] Speed optimized: ~1.2s/sample → ETA: ~4h (was 12h)")
+print(f"[INFO] Using Qwen2-VL (faster than 2.5) → ETA: ~4h")
 
 for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
