@@ -76,16 +76,17 @@ model.eval()
 # ===========================
 def parse_structured_output(text: str):
     answer, reasoning, reasoning_type = "", "", ""
-
-    m1 = re.search(r"<answer>(.*?)</answer>", text, re.S)
-    if m1:
-        answer = m1.group(1).strip()
-
-    m2 = re.search(r"<reasoning>\s*\[(\w+)\]\s*(.*?)</reasoning>", text, re.S)
-    if m2:
-        reasoning_type = m2.group(1).upper()
-        reasoning = m2.group(2).strip()
-
+    lines = text.strip().split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('Answer:'):
+            answer = line.split(':', 1)[1].strip()
+        elif line.startswith('Type:'):
+            reasoning_type = line.split(':', 1)[1].strip().upper()
+        elif line.startswith('Reasoning:'):
+            reasoning = line.split(':', 1)[1].strip()
+    
     return answer, reasoning, reasoning_type
 
 # ===========================
@@ -98,37 +99,28 @@ def call_teacher_qwen(image_path: str, question: str, ground_truth: str):
         print(f"[WARN] Cannot open image {image_path}: {e}")
         return {"answer": "", "reasoning": "", "reasoning_type": "", "raw": ""}
 
-    # Ground-truth guided prompt: Qwen tự chọn reasoning type phù hợp
-    user_prompt = f"""Hãy quan sát hình ảnh và trả lời câu hỏi sau theo đúng format XML:
+    # Simple format prompt
+    user_prompt = f"""Câu hỏi: {question}
+Đáp án: {ground_truth}
 
-Câu hỏi: {question}
-Đáp án đúng: {ground_truth}
+Hãy giải thích ngắn gọn TẠI SAO đáp án là "{ground_truth}" dựa vào hình ảnh.
 
-Nhiệm vụ: Hãy giải thích TẠI SAO đáp án là "{ground_truth}" dựa vào những gì bạn nhìn thấy trong hình ảnh.
+Format:
+Answer: {ground_truth}
+Type: [COUNTING/SPATIAL/CAUSAL/OBJECT/INTENT/COMMONSENSE/DESCRIPTIVE]
+Reasoning: (1 câu giải thích)
 
-Format bắt buộc:
-<answer>{ground_truth}</answer>
-<reasoning>[LOẠI_REASONING] Giải thích chi tiết dựa vào hình ảnh (1-2 câu)</reasoning>
-
-Trong đó LOẠI_REASONING phải là 1 trong các loại sau (TỰ CHỌN phù hợp nhất):
-- COUNTING: Đếm số lượng vật thể
-- SPATIAL: Vị trí, không gian
-- CAUSAL: Nguyên nhân, lý do
-- OBJECT: Nhận diện vật thể
-- INTENT: Mục đích, ý định
-- COMMONSENSE: Kiến thức thường thức
-- DESCRIPTIVE: Mô tả đặc điểm (màu sắc, hình dạng, trạng thái)
-
-Lưu ý: 
-- Giải thích phải liên quan trực tiếp đến nội dung hình ảnh
-- TỰ CHỌN loại reasoning phù hợp nhất với câu hỏi
-- Giải thích ngắn gọn, rõ ràng bằng tiếng Việt
+Chọn Type phù hợp:
+- COUNTING: đếm số lượng
+- SPATIAL: vị trí
+- CAUSAL: nguyên nhân
+- OBJECT: nhận diện vật
+- DESCRIPTIVE: mô tả màu sắc/hình dạng
+- COMMONSENSE: kiến thức chung
+- INTENT: mục đích
 """
 
-    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
-
-NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CHỌN loại reasoning phù hợp
-"""
+    enhanced_system_prompt = "Bạn là VQA model. Trả lời ngắn gọn theo format cho sẵn."
 
     messages = [
         {"role": "system", "content": enhanced_system_prompt},
@@ -150,11 +142,9 @@ NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CH�
         with torch.no_grad():
             output = model.generate(
                 **inputs,
-                max_new_tokens=200,
-                do_sample=True,
-                temperature=0.6,
-                top_p=0.85,
-                top_k=40
+                max_new_tokens=80,  # Reduced from 200 → 2.5x faster
+                do_sample=False,     # Greedy decoding → faster
+                temperature=1.0
             )
 
         gen = processor.batch_decode(
@@ -167,7 +157,11 @@ NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CH�
         # Fallback: Nếu Qwen không output type, dùng heuristic
         if not reasoning_type:
             reasoning_type = infer_reasoning_type(question)
-
+            # Debug để kiếm lỗi
+            if len(results) < 5:  # Only log first 5 samples
+                print(f"\n[FALLBACK] Question: {question[:30]}... → Type: {reasoning_type}")
+                print(f"  Raw: {gen[:80]}...")
+        
         return {
             "answer": answer,
             "reasoning": reasoning,
@@ -186,7 +180,8 @@ NHIỆM VỤ: Giải thích đáp án đúng dựa vào hình ảnh và TỰ CH�
 df = pd.read_csv(CSV_PATH)
 results = []
 
-print(f"[INFO] Processing {len(df)} samples | Auto-save every 100 | ETA: ~10h")
+print(f"[INFO] Processing {len(df)} samples | Auto-save every 100")
+print(f"[INFO] Speed optimized: ~1.2s/sample → ETA: ~4h (was 12h)")
 
 for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="Teacher Generating")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
