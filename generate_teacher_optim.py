@@ -15,10 +15,21 @@ from transformers import AutoProcessor, AutoModelForVision2Seq
 # ===========================
 # CONFIG
 # ===========================
-CSV_PATH = "/kaggle/input/train-balanced-syn/train_balanced_synthetic.csv"
+CSV_PATH = "/kaggle/input/vivqa/ViVQA-main/ViVQA-main/train.csv"  # GT-guided dataset
 IMAGE_DIR = "/kaggle/input/vivqa/drive-download-20220309T020508Z-001/train"
 MODEL_NAME = "Qwen/Qwen2-VL-7B-Instruct"
-OUT_JSONL = "/kaggle/working/teacher_outputs.jsonl"
+OUT_JSONL = "/kaggle/working/teacher_outputs_gt_guided.jsonl"
+
+# Reasoning type keywords for auto-classification
+REASONING_KEYWORDS = {
+    "COUNTING": ["bao nhiêu", "mấy", "số lượng", "đếm"],
+    "SPATIAL": ["ở đâu", "vị trí", "phía", "trên", "dưới", "trong", "ngoài"],
+    "CAUSAL": ["tại sao", "vì sao", "lý do", "nguyên nhân"],
+    "OBJECT": ["cái gì", "con gì", "là gì", "vật gì"],
+    "INTENT": ["mục đích", "ý định", "dùng để"],
+    "COMMONSENSE": ["nên", "thường", "có thể", "phải"],
+    "DESCRIPTIVE": []
+}
 
 REASONING_WEIGHTS = {
     "CAUSAL": 5.0,
@@ -29,6 +40,17 @@ REASONING_WEIGHTS = {
     "SPATIAL": 1.5,
     "COMMONSENSE": 1.0
 }
+
+def infer_reasoning_type(question: str) -> str:
+    """Auto-classify reasoning type from question"""
+    q_lower = question.lower().strip()
+    for rtype, keywords in REASONING_KEYWORDS.items():
+        if rtype == "DESCRIPTIVE":
+            continue
+        for kw in keywords:
+            if kw in q_lower:
+                return rtype
+    return "DESCRIPTIVE"
 
 # ===========================
 # LOAD MODEL - ĐƠN GIẢN HÓA
@@ -47,42 +69,61 @@ model = AutoModelForVision2Seq.from_pretrained(
 model.eval()
 
 # ===========================
-# PARSE OUTPUT
+# PARSE OUTPUT - SIMPLE FORMAT
 # ===========================
-def parse_structured_output(text: str):
+def parse_structured_output(text: str, question: str = ""):
+    """Parse simple format: Answer: X / Type: Y / Reasoning: Z"""
     answer, reasoning, reasoning_type = "", "", ""
-
-    m1 = re.search(r"<answer>(.*?)</answer>", text, re.S)
-    if m1:
-        answer = m1.group(1).strip()
-
-    m2 = re.search(r"<reasoning>\s*\[(\w+)\]\s*(.*?)</reasoning>", text, re.S)
-    if m2:
-        reasoning_type = m2.group(1).upper()
-        reasoning = m2.group(2).strip()
-
+    lines = text.strip().split('\n')
+    
+    for line in lines:
+        line = line.strip()
+        if line.startswith('Answer:'):
+            answer = line.split(':', 1)[1].strip()
+        elif line.startswith('Type:'):
+            reasoning_type = line.split(':', 1)[1].strip().upper()
+        elif line.startswith('Reasoning:'):
+            reasoning = line.split(':', 1)[1].strip()
+    
+    # Fallback to heuristic if no type found
+    if not reasoning_type and question:
+        reasoning_type = infer_reasoning_type(question)
+    
     return answer, reasoning, reasoning_type
 
 # ===========================
-# TEACHER GENERATION - CẢI THIỆN
+# TEACHER GENERATION - GT-GUIDED + OPTIMIZED
 # ===========================
-@torch.no_grad()  # Decorator để tự động no_grad
-def call_teacher_qwen(image_path: str, question: str, expected_type: str):
+@torch.no_grad()
+def call_teacher_qwen(image_path: str, question: str, ground_truth: str):
+    """GT-guided: Teacher explains WHY answer is ground_truth"""
     try:
         image = Image.open(image_path).convert("RGB")
     except Exception as e:
-        return None  # Trả về None thay vì dict rỗng
+        return None
 
-    from utils_prompt import SYSTEM_PROMPT, build_fewshot_prompt
-    user_prompt = build_fewshot_prompt(question)
+    # Simple format prompt
+    user_prompt = f"""Câu hỏi: {question}
+Đáp án: {ground_truth}
 
-    enhanced_system_prompt = f"""{SYSTEM_PROMPT}
+Giải thích ngắn gọn TẠI SAO đáp án là "{ground_truth}" dựa vào hình ảnh.
 
-BẠN PHẢI TRẢ LỜI THEO FORMAT:
+Format:
+Answer: {ground_truth}
+Type: [COUNTING/SPATIAL/CAUSAL/OBJECT/INTENT/COMMONSENSE/DESCRIPTIVE]
+Reasoning: (1 câu)
 
-<answer>Câu trả lời ngắn</answer>
-<reasoning>[{expected_type}] 1-2 câu giải thích</reasoning>
+Type:
+- COUNTING: đếm
+- SPATIAL: vị trí
+- CAUSAL: nguyên nhân
+- OBJECT: nhận diện
+- DESCRIPTIVE: mô tả
+- COMMONSENSE: kiến thức chung
+- INTENT: mục đích
 """
+
+    enhanced_system_prompt = "Bạn là VQA model. Trả lời ngắn gọn theo format."
 
     messages = [
         {"role": "system", "content": enhanced_system_prompt},
@@ -106,15 +147,13 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
             return_tensors="pt"
         ).to(device)
 
-        # Mixed precision + cache
+        # Mixed precision + optimized generation
         with torch.amp.autocast('cuda'):
             output = model.generate(
                 **inputs,
-                max_new_tokens=150,
-                do_sample=True,
-                temperature=0.6,
-                top_p=0.85,
-                top_k=40,
+                max_new_tokens=80,        # Reduced for speed
+                do_sample=False,          # Greedy = faster
+                temperature=1.0,
                 use_cache=True,
                 pad_token_id=processor.tokenizer.pad_token_id
             )
@@ -124,9 +163,7 @@ BẠN PHẢI TRẢ LỜI THEO FORMAT:
             skip_special_tokens=True
         )[0].strip()
 
-        answer, reasoning, reasoning_type = parse_structured_output(gen)
-        if not reasoning_type:
-            reasoning_type = expected_type
+        answer, reasoning, reasoning_type = parse_structured_output(gen, question)
 
         return {
             "answer": answer,
@@ -151,7 +188,7 @@ SAVE_INTERVAL = 200
 
 print(f"[INFO] Total samples to process: {len(df)}")
 
-for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
+for idx, (_, row) in enumerate(tqdm(df.iterrows(), total=len(df), desc="GT-Guided Teacher")):
     image_id = str(row.get("img_id", row.get("image_id", ""))).strip()
     image_path = os.path.join(IMAGE_DIR, f"{image_id}.jpg")
     
@@ -159,9 +196,9 @@ for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
         continue
 
     q = str(row["question"]).strip()
-    exp_type = row["reasoning_type"]
+    gt_answer = str(row["answer"]).strip()  # Ground truth
 
-    res = call_teacher_qwen(image_path, q, exp_type)
+    res = call_teacher_qwen(image_path, q, gt_answer)
 
     if res and res["answer"]:  # Kiểm tra res không None
         results.append({
@@ -182,9 +219,11 @@ for idx, row in tqdm(df.iterrows(), total=len(df), desc="Teacher Generating"):
                 f.write(json.dumps(r, ensure_ascii=False) + "\n")
         print(f"\n[INFO] 💾 Checkpoint: Saved {len(results)} samples")
     
-    # Clear cache mỗi 100 samples
+    # Memory management mỗi 100 samples
     if idx % 100 == 0:
         torch.cuda.empty_cache()
+        import gc
+        gc.collect()  # Python garbage collection
 
 # Final save
 with open(OUT_JSONL, "w", encoding="utf-8") as f:
